@@ -1,13 +1,13 @@
 module GAMSParse
 
-export sqr, POWER
+export sqr, POWER, parsegams
 
 # Functions used in GAMS expressions
 sqr(x) = x*x
 POWER(x,p) = x^p
 
 ## parsing
-function Base.parse(::Type{Expr}, file)
+function parsegams(::Type{Expr}, file)
     vars = String[]
     assigns = Expr[]
     retval = ""
@@ -32,7 +32,7 @@ function Base.parse(::Type{Expr}, file)
             end
         end
     end
-    @assert !isempty(vars) && neqs > 0
+    @assert !isempty(vars) && neqs > 0 && retval != ""
     to_delete = Int[]
     for i = 1:length(vars)
         if vars[i] == retval
@@ -41,8 +41,10 @@ function Base.parse(::Type{Expr}, file)
     end
     deleteat!(vars, to_delete)
     vars = Symbol.(vars)
-    blk = Expr(:block, assigns...)
-    return Expr(:function, Expr(:tuple, vars...), blk, :(return $(Symbol(retval))))
+    xin = gensym("x")
+    destruct = :($(Expr(:tuple, vars...)) = $xin)
+    blk = Expr(:block, destruct, assigns...)
+    return Expr(:function, Expr(:tuple, xin), blk, :(return $(Symbol(retval))))
 end
 
 declargs(line, prefix) = split(strip(line[length(prefix)+1:end-1]), ',')
