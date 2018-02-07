@@ -8,14 +8,16 @@ inputs = Dict("beale.gms"=>rand(2),
               "problem2.1.gms"=>rand(2),
               "yfit.gms"=>rand(3),
               "steiner_vareps.gms"=>rand(17),
-              "tointqor.gms"=>rand(50))
+              "tointqor.gms"=>rand(50),
+              "convex2_5_2.gms"=>rand(5),
+              "problem2.10.gms"=>rand(4))
 
 cd(joinpath(@__DIR__, "gams")) do
     for file in readdir()
         modex = parsegams(Module, file)
         mod = eval(modex)
         f = getfield(mod, :f)
-        @test isfinite(Base.invokelatest(f, inputs[file]))
+        @test isreal(Base.invokelatest(f, inputs[file]))
     end
 end
 

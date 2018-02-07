@@ -29,17 +29,18 @@ function parsegams(file)
             block = strip(readuntil(io, ';'))
             isempty(block) && break
             tok, rest = splitws(block; rmsemicolon=true)
-            if tok == "Sets"
+            tok = lowercase(tok)
+            if tok == "sets"
                 gams["Sets"] = sets = Dict{String,String}()
                 lines = strip.(split(rest, '\n'; keep=false))
                 for line in lines
                     sym, rng = split(line)
                     sets[sym] = rng
                 end
-            elseif tok == "Variables"
+            elseif tok == "variables"
                 vars = strip.(split(rest, r"[,\n]"))
                 gams["Variables"] = filter(x->!isempty(x), vars)
-            elseif tok == "Equations"
+            elseif tok == "equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
                 for eq in eqnames
@@ -47,22 +48,29 @@ function parsegams(file)
                     push!(eqs, eq=>stripname(eqex, eq))
                     neqs += 1
                 end
-            elseif tok == "parameters"
-                if !haskey(gams, "parameters")
-                    gams["parameters"] = Dict{String,String}()
+            elseif tok == "parameters" || tok == "parameter"
+                if !haskey(gams, "Parameters")
+                    gams["Parameters"] = Dict{String,String}()
                 end
                 sym, vals = splitws(rest)
-                if vals[1] == vals[end] == '/'
+                if !isempty(vals) && vals[1] == vals[end] == '/'
                     vals = strip(vals[2:end-1])
+                else
+                    # next block is a formula for sym
+                    block = strip(readuntil(io, ';'))
+                    @assert(startswith(block, sym))
+                    m = match(r"=", block)
+                    @assert(m != nothing)
+                    vals = strip(block[m.offset+1:end-1])
                 end
-                gams["parameters"][sym] = vals
+                gams["Parameters"][sym] = vals
             elseif tok == "table"
-                if !haskey(gams, "table")
-                    gams["table"] = Dict{String,String}()
+                if !haskey(gams, "Table")
+                    gams["Table"] = Dict{String,String}()
                 end
                 sym, vals = splitws(rest)
-                gams["table"][sym] = vals
-            elseif tok == "Solve"
+                gams["Table"][sym] = vals
+            elseif tok == "solve"
                 words = split(rest)
                 @assert words[end-1] == "minimizing"
                 gams["minimizing"] = words[end][1:end]
@@ -70,19 +78,6 @@ function parsegams(file)
         end
     end
     return gams
-    # @assert vars != nothing && neqs > 0 && retval != ""
-    # to_delete = Int[]
-    # for i = 1:length(vars)
-    #     if vars[i] == retval
-    #         push!(to_delete, i)
-    #     end
-    # end
-    # deleteat!(vars, to_delete)
-    # vars = Symbol.(vars)
-    # xin = gensym("x")
-    # destruct = :($(Expr(:tuple, vars...)) = $xin)
-    # blk = Expr(:block, destruct, assigns...)
-    # return Expr(:function, Expr(:tuple, xin), blk, :(return $(Symbol(retval))))
 end
 
 """
@@ -95,12 +90,18 @@ corresponding GAMS file.
 """
 function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     sets = parsesets(gams)
-    consts = parseconsts(gams, sets)
     vars = allvars(gams)
+    consts, constexs = parseconsts(gams, sets, vars)
     # Create the computational part of the function body
     eqex = Expr[]
     for (eqname, eqstr) in gams["Equations"]
-        push!(eqex, parseassign(eqstr, vars))
+        if iscallstr(eqname)
+            ex, _ = parse(eqname, 1)
+            indexsym = ex.args[2]
+            push!(eqex, parseassign(eqstr, vars; loop=(indexsym, sets[indexsym])))
+        else
+            push!(eqex, parseassign(eqstr, vars))
+        end
     end
     # Create the return statement
     retvalstr = gams["minimizing"]
@@ -131,6 +132,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     for (k, v) in consts
         push!(constexprs, Expr(:const, :($k = $v)))
     end
+    append!(constexprs, constexs)
     modex = quote
         module $modname
         using Compat
@@ -184,13 +186,13 @@ function allvars(gams::Dict)
     for v in gams["Variables"]
         push!(vars, GAMSParse.varsym(v))
     end
-    if haskey(gams, "table")
-        for (k,v) in gams["table"]
+    if haskey(gams, "Table")
+        for (k,v) in gams["Table"]
             push!(vars, GAMSParse.varsym(k))
         end
     end
-    if haskey(gams, "parameters")
-        for (k,v) in gams["parameters"]
+    if haskey(gams, "Parameters")
+        for (k,v) in gams["Parameters"]
             push!(vars, GAMSParse.varsym(k))
         end
     end
@@ -209,26 +211,38 @@ function parsesets(gams::Dict)
     return sets
 end
 
-function parseconsts(gams::Dict, sets::Dict{Symbol,Int})
-    consts = Dict{Symbol,Any}()
-    if haskey(gams, "parameters")
-        for (varstr, val) in gams["parameters"]
+function parseconsts(gams::Dict, sets::Dict{Symbol,Int}, vars)
+    consts, exprs = Dict{Symbol,Any}(), Expr[]
+    if haskey(gams, "Parameters")
+        for (varstr, val) in gams["Parameters"]
             varex, _ = parse(varstr, 1)
             @assert(varex.head == :call)
             varsym, indexsym = varex.args[1], varex.args[2]
             lines = split(val, '\n')
             n = sets[indexsym]
-            @assert(length(lines) == n)
-            c = Vector{Float64}(uninitialized, n)
-            for line in lines
-                istr, cstr = splitws(strip(line))
-                c[numeval(istr)] = numeval(cstr)
+            if length(lines) == n
+                c = Vector{Float64}(uninitialized, n)
+                for line in lines
+                    istr, cstr = splitws(strip(line))
+                    c[numeval(istr)] = numeval(cstr)
+                end
+                consts[varsym] = c
+            else
+                # This must be a formula for varsym
+                push!(exprs, :(const $varsym = Vector{Float64}(uninitialized, $n)))
+                lhs, rhs = calls2refs(varstr, vars), calls2refs(val, vars)
+                push!(exprs, quote
+                    for $indexsym = 1:$n
+                        $lhs = $rhs
+                    end
+                end)
+                # Also add to list of variables
+                push!(vars, varsym)
             end
-            consts[varsym] = c
         end
     end
-    if haskey(gams, "table")
-        for (varstr, val) in gams["table"]
+    if haskey(gams, "Table")
+        for (varstr, val) in gams["Table"]
             varex, _ = parse(varstr, 1)
             @assert(varex.head == :call)
             varsym, indexsym1, indexsym2 = varex.args[1], varex.args[2], varex.args[3]
@@ -248,14 +262,14 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,Int})
                     colindex = numeval(inds[1]):numeval(inds[end])
                     next_is_header = false
                 else
-                    rowvals = strip.(split(line))
+                    rowvals = strip.(split(line, r"[\s-]", keep=false))
                     c[numeval(rowvals[1]), colindex] = numeval.(rowvals[2:end])
                 end
             end
             consts[varsym] = c
         end
     end
-    return consts
+    return consts, exprs
 end
 
 function numeval(str)
@@ -276,8 +290,12 @@ function calls2refs!(ex::Expr, vars)
     return ex
 end
 calls2refs!(ex, vars) = ex
+function calls2refs(str::AbstractString, vars)
+    ex, _ = parse(str, 1)
+    return calls2refs!(ex, vars)
+end
 
-function parseassign(eqex, vars)
+function parseassign(eqex, vars; loop=nothing)
     if endswith(eqex, ';')
         eqex = eqex[1:end-1]
     end
@@ -307,7 +325,16 @@ function parseassign(eqex, vars)
         c = lhs[i] == '+' ? -1 : 1
         rest = lhs[1:i-1]
         restex = parse(rest)
-        return :($(Symbol(vstr)) = $c * $restex)
+        if loop == nothing
+            return :($(Symbol(vstr)) = $c * $restex)
+        else
+            loopvar, loopn = loop
+            return quote
+                for $loopvar = 1:$loopn
+                    $(Symbol(vstr)) = $c * $restex
+                end
+            end
+        end
     else
         error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
     end
