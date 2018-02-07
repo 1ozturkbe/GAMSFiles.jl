@@ -321,9 +321,6 @@ function calls2refs!(ex::Expr, vars)
         ex.args[i] = calls2refs!(ex.args[i], vars)
     end
     if ex.head == :call && ex.args[1] ∈ vars
-        if ex.args[2] isa Char
-            ex.args[2] = parse(Int, ex.args[2])
-        end
         return Expr(:ref, ex.args...)
     end
     return ex
@@ -380,6 +377,8 @@ function parseassign(eqex, vars; loop=nothing)
 end
 
 function replaceexprs(str, vars)
+    # Replace 'i' (where i is an integer) with the integer
+    str = replace(str, r"'(\d*)'", s"\1")
     ex, _ = parse(str, 1)
     newex = replaceexprs!(ex)
     finalex = calls2refs!(newex, vars)
