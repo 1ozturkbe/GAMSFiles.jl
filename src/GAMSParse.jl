@@ -2,7 +2,26 @@ module GAMSParse
 
 using Compat
 
-export sqr, POWER, parsegams
+export parsegams
+
+const gamsdecls = Set(["acronym", "acronyms",
+                       "equation", "equations",
+                       "model", "models",
+                       "parameter", "parameters",
+                       "scalar", "scalars",
+                       "set", "sets",
+                       "table",
+                       "variable", "variables"])
+const gamsactions = Set(["option", "options",
+                         "assign",
+                         "for",
+                         "display",
+                         "abort",
+                         "while",
+                         "execute",
+                         "solve",
+                         "loop",
+                         "repeat"])
 
 # Functions used in GAMS expressions
 gamsfuncs = quote
@@ -12,12 +31,14 @@ gamsfuncs = quote
     arctan(x) = atan(x)
 end
 
+# Translations of GAMS functions to Julia functions
 const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum)
 
 ## parsing
 function parsegams(file)
     gams = Dict{String,Any}()
     neqs = 0
+    lastdecl = ""
     open(file) do io
         while !eof(io)
             c = Base.peekchar(io)
@@ -30,17 +51,27 @@ function parsegams(file)
             isempty(block) && break
             tok, rest = splitws(block; rmsemicolon=true)
             tok = lowercase(tok)
-            if tok == "sets"
+            if tok ∈ gamsdecls
+                lastdecl = tok
+            elseif tok ∈ gamsactions
+                lastdecl = ""
+            else
+                rest = tok*" "*rest # restore for future parsing
+            end
+            if lastdecl == "set" || lastdecl == "sets"
                 gams["Sets"] = sets = Dict{String,String}()
                 lines = strip.(split(rest, '\n'; keep=false))
                 for line in lines
                     sym, rng = split(line)
                     sets[sym] = rng
                 end
-            elseif tok == "variables"
+            elseif lastdecl == "variable" || lastdecl == "variables"
+                if tok ∈ ("free", "positive", "negative", "binary", "integer")  # not yet handled
+                    continue
+                end
                 vars = strip.(split(rest, r"[,\n]"))
                 gams["Variables"] = filter(x->!isempty(x), vars)
-            elseif tok == "equations"
+            elseif lastdecl == "equation" || lastdecl == "equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
                 for eq in eqnames
@@ -48,23 +79,25 @@ function parsegams(file)
                     push!(eqs, eq=>stripname(eqex, eq))
                     neqs += 1
                 end
-            elseif tok == "parameters" || tok == "parameter"
+                lastdecl = ""
+            elseif lastdecl == "parameters" || lastdecl == "parameter"
                 if !haskey(gams, "Parameters")
                     gams["Parameters"] = Dict{String,String}()
                 end
-                sym, vals = splitws(rest)
-                if !isempty(vals) && vals[1] == vals[end] == '/'
-                    vals = strip(vals[2:end-1])
+                m = match(r"=", rest)
+                if m === nothing
+                    sym, vals = splitws(rest)
+                    if !isempty(vals) && vals[1] == vals[end] == '/'
+                        vals = strip(vals[2:end-1])
+                    end
+                    if !isempty(vals)
+                        gams["Parameters"][sym] = vals
+                    end
                 else
-                    # next block is a formula for sym
-                    block = strip(readuntil(io, ';'))
-                    @assert(startswith(block, sym))
-                    m = match(r"=", block)
-                    @assert(m != nothing)
-                    vals = strip(block[m.offset+1:end-1])
+                    lhs, rhs = strip(rest[1:m.offset-1]), strip(rest[m.offset+1:end])
+                    gams["Parameters"][lhs] = rhs
                 end
-                gams["Parameters"][sym] = vals
-            elseif tok == "table"
+            elseif lastdecl == "table"
                 if !haskey(gams, "Table")
                     gams["Table"] = Dict{String,String}()
                 end
@@ -72,8 +105,8 @@ function parsegams(file)
                 gams["Table"][sym] = vals
             elseif tok == "solve"
                 words = split(rest)
-                @assert words[end-1] == "minimizing"
-                gams["minimizing"] = words[end][1:end]
+                @assert words[end-1] == "minimizing" || words[end-1] == "maximizing"
+                gams[words[end-1]] = words[end][1:end]
             end
         end
     end
@@ -117,7 +150,9 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
         ex isa Symbol && continue
         @assert(ex.head == :call)
         varsym, indexsym = ex.args[1], ex.args[2]
-        n = sets[indexsym]
+        r = sets[indexsym]
+        @assert(first(r)==1)  # could be fixed
+        n = length(r)
         unshift!(eqex, :($varsym = Vector{Float64}(uninitialized, $n)))
     end
     if !iscallstr(varstrings[1])
@@ -200,18 +235,18 @@ function allvars(gams::Dict)
 end
 
 function parsesets(gams::Dict)
-    sets = Dict{Symbol,Int}()
+    sets = Dict{Symbol,UnitRange{Int}}()
     haskey(gams, "Sets") || return sets
     for (sym, rstr) in gams["Sets"]
         # We require these to be of the form `sym  /1*n/`
         rex, _ = parse(rstr[2:end-1], 1)
         @assert(rex.head == :call && rex.args[1] == :* && rex.args[2] == 1)
-        sets[Symbol(sym)] = rex.args[3]
+        sets[Symbol(sym)] = rex.args[2] : rex.args[3]
     end
     return sets
 end
 
-function parseconsts(gams::Dict, sets::Dict{Symbol,Int}, vars)
+function parseconsts(gams::Dict, sets::Dict{Symbol,UnitRange{Int}}, vars)
     consts, exprs = Dict{Symbol,Any}(), Expr[]
     if haskey(gams, "Parameters")
         for (varstr, val) in gams["Parameters"]
@@ -219,7 +254,9 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,Int}, vars)
             @assert(varex.head == :call)
             varsym, indexsym = varex.args[1], varex.args[2]
             lines = split(val, '\n')
-            n = sets[indexsym]
+            r = sets[indexsym]
+            @assert(first(r)==1)
+            n = length(r)
             if length(lines) == n
                 c = Vector{Float64}(uninitialized, n)
                 for line in lines
@@ -246,7 +283,9 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,Int}, vars)
             varex, _ = parse(varstr, 1)
             @assert(varex.head == :call)
             varsym, indexsym1, indexsym2 = varex.args[1], varex.args[2], varex.args[3]
-            m, n = sets[indexsym1], sets[indexsym2]
+            rm, rn = sets[indexsym1], sets[indexsym2]
+            @assert(first(rm)==1 && first(rn)==1)
+            m, n = length(rm), length(rn)
             c = Matrix{Float64}(uninitialized, m, n)
             lines = strip.(split(val, '\n'))
             next_is_header = true
@@ -328,9 +367,9 @@ function parseassign(eqex, vars; loop=nothing)
         if loop == nothing
             return :($(Symbol(vstr)) = $c * $restex)
         else
-            loopvar, loopn = loop
+            loopvar, loopr = loop
             return quote
-                for $loopvar = 1:$loopn
+                for $loopvar = $loopr
                     $(Symbol(vstr)) = $c * $restex
                 end
             end
@@ -385,5 +424,79 @@ function find_index_usage(ex::Expr, indexsym)
     return :missing, 0, false
 end
 find_index_usage(ex, indexsym) = :missing, 0, false
+
+# Full list of GAMS keywords, in case it's useful:
+const gamskws = ["abort",
+                 "acronym",
+                 "acronyms",
+                 "alias",
+                 "all",
+                 "and",
+                 "assign",
+                 "binary",
+                 "card",
+                 "diag",
+                 "display",
+                 "else",
+                 "eps",
+                 "eq",
+                 "equation",
+                 "equations",
+                 "file",
+                 "files",
+                 "for",
+                 "free",
+                 "ge",
+                 "gt",
+                 "if",
+                 "inf",
+                 "integer",
+                 "le",
+                 "loop",
+                 "lt",
+                 "maximizing",
+                 "minimizing",
+                 "model",
+                 "models",
+                 "na",
+                 "ne",
+                 "negative",
+                 "no",
+                 "not",
+                 "option",
+                 "options",
+                 "or",
+                 "ord",
+                 "parameter",
+                 "parameters",
+                 "positive",
+                 "prod",
+                 "putpage",
+                 "puttl",
+                 "repeat",
+                 "sameas",
+                 "scalar",
+                 "scalars",
+                 "semicont",
+                 "semiint",
+                 "set",
+                 "sets",
+                 "smax",
+                 "smin",
+                 "solve",
+                 "sos1",
+                 "sos2",
+                 "sum",
+                 "system",
+                 "table",
+                 "then",
+                 "until",
+                 "using",
+                 "variable",
+                 "variables",
+                 "while",
+                 "xor",
+                 "yes"]
+
 
 end # module
