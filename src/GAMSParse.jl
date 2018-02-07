@@ -8,6 +8,7 @@ export sqr, POWER, parsegams
 gamsfuncs = quote
     sqr(x) = x*x
     POWER(x,p) = x^p
+    power(x,p) = x^p
 end
 
 const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum)
@@ -102,7 +103,15 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     if i > 0
         deleteat!(varstrings, i)
     end
-    if length(varstrings) > 1 || !iscallstr(varstrings[1])
+    for j = 2:length(varstrings)
+        ex, _ = parse(varstrings[j], 1)
+        ex isa Symbol && continue
+        @assert(ex.head == :call)
+        varsym, indexsym = ex.args[1], ex.args[2]
+        n = sets[indexsym]
+        unshift!(eqex, :($varsym = Vector{Float64}(uninitialized, $n)))
+    end
+    if !iscallstr(varstrings[1])
         xin = gensym("x")
         unshift!(eqex, Expr(:(=), Expr(:tuple, Symbol.(varstrings)...), xin))
     else
@@ -154,7 +163,7 @@ end
 function varsym(str::AbstractString)
     ex, _ = parse(str, 1)
     ex isa Symbol && return ex
-    if ex isa Expr && ex.head == :call
+    if ex isa Expr && (ex.head == :call || ex.head == :ref)
         return ex.args[1]
     end
     error(str, " does not appear to refer to a variable")
@@ -251,6 +260,9 @@ function calls2refs!(ex::Expr, vars)
         ex.args[i] = calls2refs!(ex.args[i], vars)
     end
     if ex.head == :call && ex.args[1] ∈ vars
+        if ex.args[2] isa Char
+            ex.args[2] = parse(Int, ex.args[2])
+        end
         return Expr(:ref, ex.args...)
     end
     return ex
@@ -276,7 +288,8 @@ function parseassign(eqex, vars)
             i = prevind(lhs, i)
         end
         @assert(i>0)
-        v = Symbol(lhs[nextind(lhs, i):end])
+        vstr = lhs[nextind(lhs, i):end]
+        v = varsym(vstr)
         @assert(v ∈ vars)
         # Find the preceding operator
         while i > 0 && ((c = lhs[i]) != '+' && c != '-')
@@ -286,7 +299,7 @@ function parseassign(eqex, vars)
         c = lhs[i] == '+' ? -1 : 1
         rest = lhs[1:i-1]
         restex = parse(rest)
-        return :($v = $c * $restex)
+        return :($(Symbol(vstr)) = $c * $restex)
     else
         error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
     end
