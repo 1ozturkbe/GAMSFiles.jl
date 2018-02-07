@@ -1,5 +1,18 @@
+module GAMSTest
+
 using GAMSParse
 using Base.Test
 
-# write your own tests here
-@test 1 == 2
+inputs = Dict("beale.gms"=>rand(2),
+              "convex4_10_1.gms"=>rand(10))
+
+cd(joinpath(@__DIR__, "gams")) do
+    for file in readdir()
+        modex = parsegams(Module, file)
+        mod = eval(modex)
+        f = getfield(mod, :f)
+        @test isfinite(Base.invokelatest(f, inputs[file]))
+    end
+end
+
+end
