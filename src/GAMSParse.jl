@@ -9,6 +9,7 @@ gamsfuncs = quote
     sqr(x) = x*x
     POWER(x,p) = x^p
     power(x,p) = x^p
+    arctan(x) = atan(x)
 end
 
 const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum)
@@ -19,6 +20,12 @@ function parsegams(file)
     neqs = 0
     open(file) do io
         while !eof(io)
+            c = Base.peekchar(io)
+            if c == '*' || c == '\n' || c == '\r'
+                # Comment line
+                readline(io)
+                continue
+            end
             block = strip(readuntil(io, ';'))
             isempty(block) && break
             tok, rest = splitws(block; rmsemicolon=true)
@@ -30,7 +37,8 @@ function parsegams(file)
                     sets[sym] = rng
                 end
             elseif tok == "Variables"
-                gams["Variables"] = strip.(split(rest, r"[,\n]"))
+                vars = strip.(split(rest, r"[,\n]"))
+                gams["Variables"] = filter(x->!isempty(x), vars)
             elseif tok == "Equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
