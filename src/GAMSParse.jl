@@ -146,13 +146,19 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     consts, constexs = parseconsts(gams, sets, vars)
     # Create the computational part of the function body
     eqex = Expr[]
+    varops = Dict{Symbol,Symbol}()  # for initialization of sentinel values
     for (eqname, eqstr) in gams["Equations"]
         if iscallstr(eqname)
             ex, _ = parse(eqname, 1)
-            push!(eqex, parseassign(eqstr, vars; loop=map(sym->(sym, sets[sym]), ex.args[2:end])))
+            parsedeq, setvar, op = parseassign(eqstr, vars; loop=map(sym->(sym, sets[sym]), ex.args[2:end]))
         else
-            push!(eqex, parseassign(eqstr, vars))
+            parsedeq, setvar, op = parseassign(eqstr, vars)
         end
+        if op != :(=)
+            varops[setvar] = op
+            parsedeq = replace_constr_with_minmax!(parsedeq)
+        end
+        push!(eqex, parsedeq)
     end
     # Create the return statement
     retvalstr = gams["minimizing"]
@@ -165,13 +171,23 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     end
     for j = 2:length(varstrings)
         ex, _ = parse(varstrings[j], 1)
-        ex isa Symbol && continue
+        if ex isa Symbol
+            if haskey(varops, ex)
+                varinit = sentinelval[varops[ex]]
+                unshift!(eqex, :($ex = $varinit))
+            end
+            continue
+        end
         @assert(ex.head == :call)
-        varsym, indexsym = ex.args[1], ex.args[2]
-        r = sets[indexsym]
-        @assert(first(r)==1)  # could be fixed
-        n = length(r)
-        unshift!(eqex, :($varsym = Vector{Float64}(uninitialized, $n)))
+        varsym, indexsym = ex.args[1], (ex.args[2:end]...)
+        r = map(x->sets[x], indexsym)
+        n = length.(r)
+        # sentinel initialization
+        if haskey(varops, varsym)
+            varinit = sentinelval[varops[varsym]]
+            unshift!(eqex, :(fill!($varsym, $varinit)))
+        end
+        unshift!(eqex, :($varsym = Array{Float64}(uninitialized, $n)))
     end
     if !iscallstr(varstrings[1])
         xin = gensym("x")
@@ -423,13 +439,11 @@ function parseassign(eqex, vars; loop=nothing)
         lhs, rhs = rhs, lhs
         lhssym, rhssym = rhssym, lhssym
     end
+    local body
     if lhssym ∈ vars
         lhsex, rhsex = parse(lhs), parse(rhs)
         body = Expr(exhead, exargs..., lhsex, rhsex)
-        if loop == nothing
-            # Single assignment
-            return body
-        else
+        if loop != nothing
             while !isempty(loop)
                 loopvar, loopr = loop[1]
                 body = quote
@@ -439,7 +453,6 @@ function parseassign(eqex, vars; loop=nothing)
                 end
                 shift!(loop)
             end
-            return body
         end
     elseif isnumberstring(rhs)
         # Assume the variable-to-be-assigned is last
@@ -449,8 +462,8 @@ function parseassign(eqex, vars; loop=nothing)
         end
         @assert(i>0)
         vstr = lhs[nextind(lhs, i):end]
-        v = varsym(vstr)
-        @assert(v ∈ vars)
+        lhssym = varsym(vstr)
+        @assert(lhssym ∈ vars)
         # Find the preceding operator
         while i > 0 && ((c = lhs[i]) != '+' && c != '-')
             i = prevind(lhs, i)
@@ -461,9 +474,7 @@ function parseassign(eqex, vars; loop=nothing)
         restex = parse(rest)
         rhsval = numeval(rhs)
         body = Expr(exhead, exargs..., Symbol(vstr), :($c * $restex + $rhsval))
-        if loop == nothing
-            return body
-        else
+        if loop != nothing
             while !isempty(loop)
                 loopvar, loopr = loop[1]
                 body = quote
@@ -473,11 +484,11 @@ function parseassign(eqex, vars; loop=nothing)
                 end
                 shift!(loop)
             end
-            return body
         end
     else
         error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
     end
+    return body, lhssym, op
 end
 
 function replaceexprs(str, vars)
@@ -515,6 +526,24 @@ function replaceexprs!(ex::Expr)
     return ex
 end
 replaceexprs!(ex) = ex
+
+## Converting =g= and =l= (> and <) "constraints" into min/max statements
+const sentinelval = Dict(:> => -Inf, :< => Inf)
+
+function replace_constr_with_minmax!(ex::Expr)
+    if ex.head == :call && length(ex.args) == 3
+        if ex.args[1] == :>
+            return Expr(:(=), ex.args[2], Expr(:call, :max, ex.args[2], ex.args[3]))
+        elseif ex.args[1] == :<
+            return Expr(:(=), ex.args[2], Expr(:call, :min, ex.args[2], ex.args[3]))
+        end
+    end
+    for i = 1:length(ex.args)
+        ex.args[i] = replace_constr_with_minmax!(ex.args[i])
+    end
+    return ex
+end
+replace_constr_with_minmax!(arg) = arg
 
 function find_index_usage(ex::Expr, indexsym)
     if ex.head == :call
