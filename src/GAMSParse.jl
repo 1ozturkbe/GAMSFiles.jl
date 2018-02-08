@@ -251,13 +251,14 @@ end
 
 iscallstr(str) = match(r"\(.*\)", str) != nothing
 function callsym(str)
-    iscallstr(str) || return nothing
     local ex
     try
         ex = parse(str)
     catch
         error("couldn't parse ", str)
     end
+    ex isa Symbol && return ex
+    ex isa Expr || return nothing
     if ex.head == :call
         cstr = string(ex.args[1])
         # GAMS variables must start with a letter and can only contain letters and numbers
