@@ -69,9 +69,15 @@ function parsegams(file)
                 if tok ∈ ("free", "positive", "negative", "binary", "integer")  # not yet handled
                     continue
                 end
-                vars = strip.(split(rest, r"[,\n]"))
-                gams["Variables"] = filter(x->!isempty(x), vars)
-            elseif lastdecl == "equation" || lastdecl == "equations"
+                m = match(r"=", rest)
+                if m == nothing
+                    vars = strip.(split(rest, r"[,\n]"))
+                    gams["Variables"] = filter(x->!isempty(x), vars)
+                else
+                    lastdecl = "parameters"  # process in the parameters block
+                end
+            end
+            if lastdecl == "equation" || lastdecl == "equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
                 for eq in eqnames
