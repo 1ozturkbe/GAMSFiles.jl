@@ -1,5 +1,6 @@
 module GAMSParse
 
+using DataStructures
 using Compat
 
 export parsegams
@@ -95,16 +96,21 @@ function parsegams(file)
                 lastdecl = ""
             elseif lastdecl == "parameters" || lastdecl == "parameter"
                 if !haskey(gams, "Parameters")
-                    gams["Parameters"] = Dict{String,String}()
+                    gams["Parameters"] = OrderedDict{String,String}()
                 end
                 m = match(r"=", rest)
                 if m === nothing
                     sym, vals = splitws(rest)
-                    if !isempty(vals) && vals[1] == vals[end] == '/'
-                        vals = strip(vals[2:end-1])
-                    end
-                    if !isempty(vals)
-                        gams["Parameters"][sym] = vals
+                    if isempty(vals)
+                        # This is a "size" declaration
+                        gams["Parameters"][sym] = ""
+                    else
+                        if !isempty(vals) && vals[1] == vals[end] == '/'
+                            vals = strip(vals[2:end-1])
+                        end
+                        if !isempty(vals)
+                            gams["Parameters"][sym] = vals
+                        end
                     end
                 else
                     lhs, rhs = strip(rest[1:m.offset-1]), strip(rest[m.offset+1:end])
@@ -254,8 +260,11 @@ function parsesets(gams::Dict)
     for (sym, rstr) in gams["Sets"]
         # We require these to be of the form `sym  /1*n/`
         rex, _ = parse(rstr[2:end-1], 1)
-        @assert(rex.head == :call && rex.args[1] == :* && rex.args[2] == 1)
-        sets[Symbol(sym)] = rex.args[2] : rex.args[3]
+        if rex.head == :call && rex.args[1] == :* && rex.args[2] == 1
+            sets[Symbol(sym)] = rex.args[2] : rex.args[3]
+        else
+            error("failed to parse set assignment ", rstr)
+        end
     end
     return sets
 end
@@ -266,29 +275,55 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,UnitRange{Int}}, vars)
         for (varstr, val) in gams["Parameters"]
             varex, _ = parse(varstr, 1)
             @assert(varex.head == :call)
-            varsym, indexsym = varex.args[1], varex.args[2]
-            lines = split(val, '\n')
-            r = sets[indexsym]
-            @assert(first(r)==1)
-            n = length(r)
-            if length(lines) == n
-                c = Vector{Float64}(uninitialized, n)
-                for line in lines
-                    istr, cstr = splitws(strip(line))
-                    c[numeval(istr)] = numeval(cstr)
-                end
-                consts[varsym] = c
-            else
-                # This must be a formula for varsym
-                push!(exprs, :(const $varsym = Vector{Float64}(uninitialized, $n)))
-                lhs, rhs = calls2refs(varstr, vars), calls2refs(val, vars)
-                push!(exprs, quote
-                    for $indexsym = 1:$n
-                        $lhs = $rhs
+            varsym, indexsym = varex.args[1], (varex.args[2:end]...)
+            if indexsym isa Tuple{Symbol,Vararg{Symbol}}
+                r = map(x->sets[x], indexsym)
+                n = length.(r)
+                if val == ""
+                    # Allocation only
+                    consts[varsym] = Array{Float64}(uninitialized, n)
+                else
+                    lines = split(val, '\n')
+                    if length(lines) == prod(n)
+                        c = haskey(consts, varsym) ? consts[varsym] : Array{Float64}(uninitialized, n)
+                        for line in lines
+                            istr, cstr = splitws(strip(line))
+                            c[numeval(istr)] = numeval(cstr)
+                        end
+                        consts[varsym] = c
+                    else
+                        # The expression must be a formula for varsym
+                        push!(exprs, :(const $varsym = Array{Float64}(uninitialized, $n)))
+                        lhs, rhs = calls2refs(varstr, vars), calls2refs(val, vars)
+                        body = Expr(:(=), lhs, rhs)
+                        while !isempty(indexsym)
+                            thissym, thisr = indexsym[1], r[1]
+                            body = quote
+                                for $thissym in $thisr
+                                    $body
+                                end
+                            end
+                            indexsym, r = Base.tail(indexsym), Base.tail(r)
+                        end
+                        push!(exprs, body)
+                        # Also add to list of variables
+                        push!(vars, varsym)
                     end
-                end)
-                # Also add to list of variables
-                push!(vars, varsym)
+                end
+            elseif indexsym isa Tuple{Integer,Vararg{Integer}}
+                c = consts[varsym]
+                if isnumberstring(val)
+                    c[indexsym...] = numeval(val)
+                else
+                    varex = calls2refs!(varex, vars)
+                    rhs = calls2refs!(parse(val), vars)
+                    if rhs.head == :ref && all(x->isa(x, Number), rhs.args[2:end])
+                        rc = consts[rhs.args[1]]
+                        c[indexsym...] = rc[rhs.args[2:end]...]
+                    else
+                        push!(exprs, :($varex = $rhs))
+                    end
+                end
             end
         end
     end
