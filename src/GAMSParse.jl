@@ -323,6 +323,11 @@ function numeval(str)
     return m == nothing ? parse(Int, str) : parse(Float64, str)
 end
 
+function isnumberstring(str)
+    m = match(r"^[+-]?[0-9]*\.?[0-9]*$", str)
+    return m !== nothing
+end
+
 function calls2refs!(ex::Expr, vars)
     for i = 1:length(ex.args)
         ex.args[i] = calls2refs!(ex.args[i], vars)
@@ -346,11 +351,13 @@ function parseassign(eqex, vars; loop=nothing)
     m === nothing && error("cannot parse ", eqex)
     lhs, rhs = strip(eqex[1:m.offset-1]), strip(eqex[m.offset+3:end])
     lhs, rhs = replaceexprs(lhs, vars), replaceexprs(rhs, vars)
+    if rhs ∈ vars || isnumberstring(lhs)
+        lhs, rhs = rhs, lhs
+    end
     if lhs ∈ vars
-        return :($(Symbol(lhs)) = $(Symbol(rhs)))
-    elseif rhs ∈ vars
-        return :($(Symbol(rhs)) = $(Symbol(lhs)))
-    elseif rhs == "0"
+        lhsex, rhsex = parse(lhs), parse(rhs)
+        return :($lhsex = $rhsex)
+    elseif isnumberstring(rhs)
         # Assume the variable-to-be-assigned is last
         i = endof(lhs)
         while !isspace(lhs[i]) && i > 0
@@ -368,13 +375,14 @@ function parseassign(eqex, vars; loop=nothing)
         c = lhs[i] == '+' ? -1 : 1
         rest = lhs[1:i-1]
         restex = parse(rest)
+        rhsval = numeval(rhs)
         if loop == nothing
-            return :($(Symbol(vstr)) = $c * $restex)
+            return :($(Symbol(vstr)) = $c * $restex + $rhsval)
         else
             loopvar, loopr = loop
             return quote
                 for $loopvar = $loopr
-                    $(Symbol(vstr)) = $c * $restex
+                    $(Symbol(vstr)) = $c * $restex + $rhsval
                 end
             end
         end
