@@ -5,6 +5,7 @@ using Compat
 export parsegams
 
 const gamsdecls = Set(["acronym", "acronyms",
+                       "alias",
                        "equation", "equations",
                        "model", "models",
                        "parameter", "parameters",
@@ -65,6 +66,11 @@ function parsegams(file)
                     sym, rng = split(line)
                     sets[sym] = rng
                 end
+            elseif lastdecl == "alias"
+                ex = parse(rest)
+                @assert(ex.head == :tuple && length(ex.args) == 2)
+                symold, symnew = ex.args
+                sets[string(symnew)] = sets[string(symold)]
             elseif lastdecl == "variable" || lastdecl == "variables"
                 if tok ∈ ("free", "positive", "negative", "binary", "integer")  # not yet handled
                     continue
