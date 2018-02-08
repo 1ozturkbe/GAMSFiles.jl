@@ -149,8 +149,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     for (eqname, eqstr) in gams["Equations"]
         if iscallstr(eqname)
             ex, _ = parse(eqname, 1)
-            indexsym = ex.args[2]
-            push!(eqex, parseassign(eqstr, vars; loop=(indexsym, sets[indexsym])))
+            push!(eqex, parseassign(eqstr, vars; loop=map(sym->(sym, sets[sym]), ex.args[2:end])))
         else
             push!(eqex, parseassign(eqstr, vars))
         end
@@ -235,6 +234,21 @@ function varsym(str::AbstractString)
 end
 
 iscallstr(str) = match(r"\(.*\)", str) != nothing
+function callsym(str)
+    iscallstr(str) || return nothing
+    local ex
+    try
+        ex = parse(str)
+    catch
+        error("couldn't parse ", str)
+    end
+    if ex.head == :call
+        cstr = string(ex.args[1])
+        # GAMS variables must start with a letter and can only contain letters and numbers
+        match(r"^[a-zA-Z][a-zA-Z0-9]*$", cstr) != nothing && return ex.args[1]
+    end
+    return nothing
+end
 
 function allvars(gams::Dict)
     vars = Set{Symbol}()
@@ -385,20 +399,48 @@ function calls2refs(str::AbstractString, vars)
     return calls2refs!(ex, vars)
 end
 
+const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
+
 function parseassign(eqex, vars; loop=nothing)
     if endswith(eqex, ';')
         eqex = eqex[1:end-1]
     end
-    m = match(r"=[eE]=", eqex)
+    m = match(r"=([eEgGlL])=", eqex)
     m === nothing && error("cannot parse ", eqex)
-    lhs, rhs = strip(eqex[1:m.offset-1]), strip(eqex[m.offset+3:end])
-    lhs, rhs = replaceexprs(lhs, vars), replaceexprs(rhs, vars)
-    if rhs ∈ vars || isnumberstring(lhs)
-        lhs, rhs = rhs, lhs
+    @assert(length(m.captures) == 1)
+    op = eqops[m.captures[1]]
+    if op == :(=)
+        exhead = op
+        exargs = ()
+    else
+        exhead = :call
+        exargs = (op,)
     end
-    if lhs ∈ vars
+    lhs, rhs = strip(eqex[1:m.offset-1]), strip(eqex[m.offset+3:end])
+    lhssym, rhssym = callsym(lhs), callsym(rhs)
+    lhs, rhs = replaceexprs(lhs, vars), replaceexprs(rhs, vars)
+    if rhssym ∈ vars || isnumberstring(lhs)
+        lhs, rhs = rhs, lhs
+        lhssym, rhssym = rhssym, lhssym
+    end
+    if lhssym ∈ vars
         lhsex, rhsex = parse(lhs), parse(rhs)
-        return :($lhsex = $rhsex)
+        body = Expr(exhead, exargs..., lhsex, rhsex)
+        if loop == nothing
+            # Single assignment
+            return body
+        else
+            while !isempty(loop)
+                loopvar, loopr = loop[1]
+                body = quote
+                    for $loopvar = $loopr
+                        $body
+                    end
+                end
+                shift!(loop)
+            end
+            return body
+        end
     elseif isnumberstring(rhs)
         # Assume the variable-to-be-assigned is last
         i = endof(lhs)
@@ -418,15 +460,20 @@ function parseassign(eqex, vars; loop=nothing)
         rest = lhs[1:i-1]
         restex = parse(rest)
         rhsval = numeval(rhs)
+        body = Expr(exhead, exargs..., Symbol(vstr), :($c * $restex + $rhsval))
         if loop == nothing
-            return :($(Symbol(vstr)) = $c * $restex + $rhsval)
+            return body
         else
-            loopvar, loopr = loop
-            return quote
-                for $loopvar = $loopr
-                    $(Symbol(vstr)) = $c * $restex + $rhsval
+            while !isempty(loop)
+                loopvar, loopr = loop[1]
+                body = quote
+                    for $loopvar = $loopr
+                        $body
+                    end
                 end
+                shift!(loop)
             end
+            return body
         end
     else
         error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
