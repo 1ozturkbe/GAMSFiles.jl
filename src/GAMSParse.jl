@@ -59,6 +59,7 @@ function parsegams(file)
             else
                 rest = tok*" "*rest # restore for future parsing
             end
+            rest = replace_charints(rest)
             if lastdecl == "set" || lastdecl == "sets"
                 gams["Sets"] = sets = Dict{String,String}()
                 lines = strip.(split(rest, '\n'; keep=false))
@@ -87,7 +88,7 @@ function parsegams(file)
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
                 for eq in eqnames  # this is just a counter, because the order isn't guaranteed
-                    eqex = replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' ')
+                    eqex = replace_charints(replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' '))
                     push!(eqs, stripname(eqex))
                     neqs += 1
                 end
@@ -398,12 +399,15 @@ function parseassign(eqex, vars; loop=nothing)
 end
 
 function replaceexprs(str, vars)
-    # Replace 'i' (where i is an integer) with the integer
-    str = replace(str, r"'(\d*)'", s"\1")
     ex, _ = parse(str, 1)
     newex = replaceexprs!(ex)
     finalex = calls2refs!(newex, vars)
     string(finalex)
+end
+
+function replace_charints(str)
+    # Replace 'i' (where i is an integer) with the integer
+    return replace(str, r"'(\d*)'", s"\1")
 end
 
 function replaceexprs!(ex::Expr)
