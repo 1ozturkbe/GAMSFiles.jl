@@ -44,7 +44,7 @@ function parsegams(file)
     open(file) do io
         while !eof(io)
             c = Base.peekchar(io)
-            if c == '*' || c == '\n' || c == '\r'
+            if c == '*' || c == '$' || c == '\n' || c == '\r'
                 # Comment line
                 readline(io)
                 continue
@@ -82,39 +82,26 @@ function parsegams(file)
                     vars = strip.(split(rest, r"[,\n]"))
                     gams["Variables"] = filter(x->!isempty(x), vars)
                 else
-                    lastdecl = "parameters"  # process in the parameters block
+                    parseparameters!(gams, rest)
                 end
-            end
-            if lastdecl == "equation" || lastdecl == "equations"
+            elseif lastdecl == "equation" || lastdecl == "equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
                 for eq in eqnames  # this is just a counter, because the order isn't guaranteed
-                    eqex = replace_charints(replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' '))
+                    eqstr = replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' ')
+                    eqex = replace_pow(replace_charints(eqstr))
                     push!(eqs, stripname(eqex))
                     neqs += 1
                 end
                 lastdecl = ""
             elseif lastdecl == "parameters" || lastdecl == "parameter"
-                if !haskey(gams, "Parameters")
-                    gams["Parameters"] = OrderedDict{String,String}()
-                end
-                m = match(r"=", rest)
-                if m === nothing
-                    sym, vals = splitws(rest)
-                    if isempty(vals)
-                        # This is a "size" declaration
-                        gams["Parameters"][sym] = ""
-                    else
-                        if !isempty(vals) && vals[1] == vals[end] == '/'
-                            vals = strip(vals[2:end-1])
-                        end
-                        if !isempty(vals)
-                            gams["Parameters"][sym] = vals
-                        end
+                if match(r"\n", rest) != nothing && match(r"/", rest) == nothing
+                    rest = strip.(split(rest, '\n'))
+                    for str in rest
+                        parseparameters!(gams, str)
                     end
                 else
-                    lhs, rhs = strip(rest[1:m.offset-1]), strip(rest[m.offset+1:end])
-                    gams["Parameters"][lhs] = rhs
+                    parseparameters!(gams, rest)
                 end
             elseif lastdecl == "table"
                 if !haskey(gams, "Table")
@@ -222,6 +209,31 @@ function parsegams(::Type{Module}, filename::AbstractString)
     gams = parsegams(filename)
     bname, _ = splitext(basename(filename))
     return parsegams(Module, Symbol(bname), gams)
+end
+
+function parseparameters!(gams, rest)
+    if !haskey(gams, "Parameters")
+        gams["Parameters"] = OrderedDict{String,String}()
+    end
+    m = match(r"=", rest)
+    if m === nothing
+        sym, vals = splitws(rest)
+        if isempty(vals)
+            # This is a "size" declaration
+            gams["Parameters"][sym] = ""
+        else
+            if !isempty(vals) && vals[1] == vals[end] == '/'
+                vals = strip(vals[2:end-1])
+            end
+            if !isempty(vals)
+                gams["Parameters"][sym] = vals
+            end
+        end
+    else
+        lhs, rhs = strip(rest[1:m.offset-1]), strip(rest[m.offset+1:end])
+        gams["Parameters"][lhs] = rhs
+    end
+    return gams
 end
 
 function splitws(str; rmsemicolon::Bool=false)
@@ -399,7 +411,7 @@ function numeval(str)
 end
 
 function isnumberstring(str)
-    m = match(r"^[+-]?[0-9]*\.?[0-9]*$", str)
+    m = match(r"^[+-]?[0-9]*\.?[0-9]*([eE][+-]?[0-9]*)?$", str)
     return m !== nothing
 end
 
@@ -504,6 +516,11 @@ end
 function replace_charints(str)
     # Replace 'i' (where i is an integer) with the integer
     return replace(str, r"'(\d*)'", s"\1")
+end
+
+function replace_pow(str)
+    # Replace "**" -> "^"
+    return replace(str, r"\*\*", s"^")
 end
 
 function replaceexprs!(ex::Expr)
