@@ -62,7 +62,10 @@ function parsegams(file)
             end
             rest = replace_charints(rest)
             if lastdecl == "set" || lastdecl == "sets"
-                gams["Sets"] = sets = Dict{String,String}()
+                if !haskey(gams, "Sets")
+                    gams["Sets"] = Dict{String,String}()
+                end
+                sets = gams["Sets"]
                 lines = strip.(split(rest, '\n'; keep=false))
                 for line in lines
                     sym, rng = split(line)
@@ -73,6 +76,12 @@ function parsegams(file)
                 @assert(ex.head == :tuple && length(ex.args) == 2)
                 symold, symnew = ex.args
                 sets[string(symnew)] = sets[string(symold)]
+            elseif lastdecl == "scalar" || lastdecl == "scalars"
+                if !haskey(gams, "Scalars")
+                    gams["Scalars"] = Dict{String,String}()
+                end
+                scalars = gams["Scalars"]
+                parseparameters!(scalars, rest)
             elseif lastdecl == "variable" || lastdecl == "variables"
                 if tok ∈ ("free", "positive", "negative", "binary", "integer")  # not yet handled
                     continue
@@ -82,26 +91,33 @@ function parsegams(file)
                     vars = strip.(split(rest, r"[,\n]"))
                     gams["Variables"] = filter(x->!isempty(x), vars)
                 else
-                    parseparameters!(gams, rest)
+                    if !haskey(gams, "Parameters")
+                        gams["Parameters"] = OrderedDict{String,String}()
+                    end
+                    parseparameters!(gams["Parameters"], rest)
                 end
             elseif lastdecl == "equation" || lastdecl == "equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
                 for eq in eqnames  # this is just a counter, because the order isn't guaranteed
                     eqstr = replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' ')
-                    eqex = replace_pow(replace_charints(eqstr))
+                    eqex = replace_logical(replace_pow(replace_charints(eqstr)))
                     push!(eqs, stripname(eqex))
                     neqs += 1
                 end
                 lastdecl = ""
             elseif lastdecl == "parameters" || lastdecl == "parameter"
+                if !haskey(gams, "Parameters")
+                    gams["Parameters"] = OrderedDict{String,String}()
+                end
+                params = gams["Parameters"]
                 if match(r"\n", rest) != nothing && match(r"/", rest) == nothing
                     rest = strip.(split(rest, '\n'))
                     for str in rest
-                        parseparameters!(gams, str)
+                        parseparameters!(params, str)
                     end
                 else
-                    parseparameters!(gams, rest)
+                    parseparameters!(params, rest)
                 end
             elseif lastdecl == "table"
                 if !haskey(gams, "Table")
@@ -211,29 +227,26 @@ function parsegams(::Type{Module}, filename::AbstractString)
     return parsegams(Module, Symbol(bname), gams)
 end
 
-function parseparameters!(gams, rest)
-    if !haskey(gams, "Parameters")
-        gams["Parameters"] = OrderedDict{String,String}()
-    end
+function parseparameters!(dest, rest)
     m = match(r"=", rest)
     if m === nothing
         sym, vals = splitws(rest)
         if isempty(vals)
             # This is a "size" declaration
-            gams["Parameters"][sym] = ""
+            dest[sym] = ""
         else
             if !isempty(vals) && vals[1] == vals[end] == '/'
                 vals = strip(vals[2:end-1])
             end
             if !isempty(vals)
-                gams["Parameters"][sym] = vals
+                dest[sym] = vals
             end
         end
     else
         lhs, rhs = strip(rest[1:m.offset-1]), strip(rest[m.offset+1:end])
-        gams["Parameters"][lhs] = rhs
+        dest[lhs] = rhs
     end
-    return gams
+    return dest
 end
 
 function splitws(str; rmsemicolon::Bool=false)
@@ -316,57 +329,63 @@ end
 
 function parseconsts(gams::Dict, sets::Dict{Symbol,UnitRange{Int}}, vars)
     consts, exprs = Dict{Symbol,Any}(), Expr[]
-    if haskey(gams, "Parameters")
-        for (varstr, val) in gams["Parameters"]
-            varex, _ = parse(varstr, 1)
-            @assert(varex.head == :call)
-            varsym, indexsym = varex.args[1], (varex.args[2:end]...)
-            if indexsym isa Tuple{Symbol,Vararg{Symbol}}
-                r = map(x->sets[x], indexsym)
-                dims = map(last, r)
-                if val == ""
-                    # Allocation only
-                    consts[varsym] = Array{Float64}(uninitialized, dims)
-                else
-                    lines = split(val, '\n')
-                    if length(lines) == prod(length.(r))
-                        c = haskey(consts, varsym) ? consts[varsym] : Array{Float64}(uninitialized, dims)
-                        for line in lines
-                            istr, cstr = splitws(strip(line))
-                            c[numeval(istr)] = numeval(cstr)
-                        end
-                        consts[varsym] = c
-                    else
-                        # The expression must be a formula for varsym
-                        push!(exprs, :(const $varsym = Array{Float64}(uninitialized, $dims)))
-                        lhs, rhs = calls2refs(varstr, vars), calls2refs(val, vars)
-                        body = Expr(:(=), lhs, rhs)
-                        while !isempty(indexsym)
-                            thissym, thisr = indexsym[1], r[1]
-                            body = quote
-                                for $thissym in $thisr
-                                    $body
-                                end
-                            end
-                            indexsym, r = Base.tail(indexsym), Base.tail(r)
-                        end
-                        push!(exprs, body)
-                        # Also add to list of variables
-                        push!(vars, varsym)
-                    end
+    for fn = ("Parameters", "Scalars")
+        if haskey(gams, fn)
+            for (varstr, val) in gams[fn]
+                varex, _ = parse(varstr, 1)
+                if varex isa Symbol
+                    consts[varex] = parse(val)
+                    continue
                 end
-            elseif indexsym isa Tuple{Integer,Vararg{Integer}}
-                c = consts[varsym]
-                if isnumberstring(val)
-                    c[indexsym...] = numeval(val)
-                else
-                    varex = calls2refs!(varex, vars)
-                    rhs = calls2refs!(parse(val), vars)
-                    if rhs.head == :ref && all(x->isa(x, Number), rhs.args[2:end])
-                        rc = consts[rhs.args[1]]
-                        c[indexsym...] = rc[rhs.args[2:end]...]
+                @assert(varex.head == :call)
+                varsym, indexsym = varex.args[1], (varex.args[2:end]...)
+                if indexsym isa Tuple{Symbol,Vararg{Symbol}}
+                    r = map(x->sets[x], indexsym)
+                    dims = map(last, r)
+                    if val == ""
+                        # Allocation only
+                        consts[varsym] = Array{Float64}(uninitialized, dims)
                     else
-                        push!(exprs, :($varex = $rhs))
+                        lines = split(val, '\n')
+                        if length(lines) == prod(length.(r))
+                            c = haskey(consts, varsym) ? consts[varsym] : Array{Float64}(uninitialized, dims)
+                            for line in lines
+                                istr, cstr = splitws(strip(line))
+                                c[numeval(istr)] = numeval(cstr)
+                            end
+                            consts[varsym] = c
+                        else
+                            # The expression must be a formula for varsym
+                            push!(exprs, :(const $varsym = Array{Float64}(uninitialized, $dims)))
+                            lhs, rhs = calls2refs(varstr, vars), calls2refs(val, vars)
+                            body = Expr(:(=), lhs, rhs)
+                            while !isempty(indexsym)
+                                thissym, thisr = indexsym[1], r[1]
+                                body = quote
+                                    for $thissym in $thisr
+                                        $body
+                                    end
+                                end
+                                indexsym, r = Base.tail(indexsym), Base.tail(r)
+                            end
+                            push!(exprs, body)
+                            # Also add to list of variables
+                            push!(vars, varsym)
+                        end
+                    end
+                elseif indexsym isa Tuple{Integer,Vararg{Integer}}
+                    c = consts[varsym]
+                    if isnumberstring(val)
+                        c[indexsym...] = numeval(val)
+                    else
+                        varex = calls2refs!(varex, vars)
+                        rhs = calls2refs!(parse(val), vars)
+                        if rhs.head == :ref && all(x->isa(x, Number), rhs.args[2:end])
+                            rc = consts[rhs.args[1]]
+                            c[indexsym...] = rc[rhs.args[2:end]...]
+                        else
+                            push!(exprs, :($varex = $rhs))
+                        end
                     end
                 end
             end
@@ -488,7 +507,7 @@ function parseassign(eqex, vars; loop=nothing)
         rest = lhs[1:i-1]
         restex = parse(rest)
         rhsval = numeval(rhs)
-        body = Expr(exhead, exargs..., Symbol(vstr), :($c * $restex + $rhsval))
+        body = Expr(exhead, exargs..., parse(vstr), :($c * $restex + $rhsval))
         if loop != nothing
             while !isempty(loop)
                 loopvar, loopr = loop[1]
@@ -521,6 +540,12 @@ end
 function replace_pow(str)
     # Replace "**" -> "^"
     return replace(str, r"\*\*", s"^")
+end
+
+function replace_logical(str)
+    str = replace(str, r" and ", s" & ")
+    str = replace(str, r" or ", s" | ")
+    return str
 end
 
 function replaceexprs!(ex::Expr)
