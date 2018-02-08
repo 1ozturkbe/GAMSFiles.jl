@@ -181,13 +181,13 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
         @assert(ex.head == :call)
         varsym, indexsym = ex.args[1], (ex.args[2:end]...)
         r = map(x->sets[x], indexsym)
-        n = length.(r)
+        dims = map(last, r)
         # sentinel initialization
         if haskey(varops, varsym)
             varinit = sentinelval[varops[varsym]]
             unshift!(eqex, :(fill!($varsym, $varinit)))
         end
-        unshift!(eqex, :($varsym = Array{Float64}(uninitialized, $n)))
+        unshift!(eqex, :($varsym = Array{Float64}(uninitialized, $dims)))
     end
     if !iscallstr(varstrings[1])
         xin = gensym("x")
@@ -291,8 +291,10 @@ function parsesets(gams::Dict)
     for (sym, rstr) in gams["Sets"]
         # We require these to be of the form `sym  /1*n/`
         rex, _ = parse(rstr[2:end-1], 1)
-        if rex.head == :call && rex.args[1] == :* && rex.args[2] == 1
-            sets[Symbol(sym)] = rex.args[2] : rex.args[3]
+        if rex.head == :call && rex.args[1] == :* && length(rex.args) == 3 &&
+                isa(rex.args[2], Integer) && isa(rex.args[3], Integer)
+            a, b = rex.args[2], rex.args[3]
+            sets[Symbol(sym)] = a == 1 ? Base.OneTo(b) : (a:b)
         else
             error("failed to parse set assignment ", rstr)
         end
@@ -309,14 +311,14 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,UnitRange{Int}}, vars)
             varsym, indexsym = varex.args[1], (varex.args[2:end]...)
             if indexsym isa Tuple{Symbol,Vararg{Symbol}}
                 r = map(x->sets[x], indexsym)
-                n = length.(r)
+                dims = map(last, r)
                 if val == ""
                     # Allocation only
-                    consts[varsym] = Array{Float64}(uninitialized, n)
+                    consts[varsym] = Array{Float64}(uninitialized, dims)
                 else
                     lines = split(val, '\n')
-                    if length(lines) == prod(n)
-                        c = haskey(consts, varsym) ? consts[varsym] : Array{Float64}(uninitialized, n)
+                    if length(lines) == prod(length.(r))
+                        c = haskey(consts, varsym) ? consts[varsym] : Array{Float64}(uninitialized, dims)
                         for line in lines
                             istr, cstr = splitws(strip(line))
                             c[numeval(istr)] = numeval(cstr)
@@ -324,7 +326,7 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,UnitRange{Int}}, vars)
                         consts[varsym] = c
                     else
                         # The expression must be a formula for varsym
-                        push!(exprs, :(const $varsym = Array{Float64}(uninitialized, $n)))
+                        push!(exprs, :(const $varsym = Array{Float64}(uninitialized, $dims)))
                         lhs, rhs = calls2refs(varstr, vars), calls2refs(val, vars)
                         body = Expr(:(=), lhs, rhs)
                         while !isempty(indexsym)
@@ -362,13 +364,13 @@ function parseconsts(gams::Dict, sets::Dict{Symbol,UnitRange{Int}}, vars)
         for (varstr, val) in gams["Table"]
             varex, _ = parse(varstr, 1)
             @assert(varex.head == :call)
-            varsym, indexsym1, indexsym2 = varex.args[1], varex.args[2], varex.args[3]
-            rm, rn = sets[indexsym1], sets[indexsym2]
-            @assert(first(rm)==1 && first(rn)==1)
-            m, n = length(rm), length(rn)
-            c = Matrix{Float64}(uninitialized, m, n)
+            varsym, indexsym = varex.args[1], (varex.args[2:end]...)
+            r = map(x->sets[x], indexsym)
+            dims = map(last, r)
+            c = Array{Float64}(uninitialized, dims)
             lines = strip.(split(val, '\n'))
             next_is_header = true
+            @assert(length(r) == 2)  # need to see an example before generalizing what follows
             colindex = 0:0
             for line in lines
                 if isempty(line)

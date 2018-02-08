@@ -13,7 +13,8 @@ inputs = Dict("beale.gms"=>rand(2),
               "problem2.10.gms"=>rand(4),
               "convex3_10_1.gms"=>rand(10),
               "zangwil2.gms"=>rand(2),
-              "problem3.21.gms"=>rand(48))
+              "problem3.21.gms"=>rand(48),
+              "problem2.24.gms"=>rand(20))
 
 cd(joinpath(@__DIR__, "gams")) do
     for file in readdir()
