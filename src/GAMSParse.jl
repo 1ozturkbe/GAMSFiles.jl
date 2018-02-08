@@ -80,9 +80,9 @@ function parsegams(file)
             if lastdecl == "equation" || lastdecl == "equations"
                 gams["Equations"] = eqs = Pair{String,String}[]
                 eqnames = strip.(split(rest, r"[,\n]"))
-                for eq in eqnames
+                for eq in eqnames  # this is just a counter, because the order isn't guaranteed
                     eqex = replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' ')
-                    push!(eqs, eq=>stripname(eqex, eq))
+                    push!(eqs, stripname(eqex))
                     neqs += 1
                 end
                 lastdecl = ""
@@ -206,9 +206,10 @@ function splitws(str; rmsemicolon::Bool=false)
     return str[1:m.offset-1], strip(str[m.offset:iend])
 end
 
-function stripname(eqstr, eqname)
-    @assert(startswith(eqstr, eqname))
-    return strip(eqstr[length(eqname)+3:end])
+function stripname(eqstr)
+    m = match(r"\.\.", eqstr)
+    @assert(m != nothing)
+    return strip(eqstr[1:m.offset-1]) => strip(eqstr[m.offset+3:end])
 end
 
 function varsym(str::AbstractString)
