@@ -5,130 +5,128 @@ using Compat
 
 export parsegams
 
-const gamsdecls = Set(["acronym", "acronyms",
-                       "alias",
-                       "equation", "equations",
-                       "model", "models",
-                       "parameter", "parameters",
-                       "scalar", "scalars",
-                       "set", "sets",
-                       "table",
-                       "variable", "variables"])
-const gamsactions = Set(["option", "options",
-                         "assign",
-                         "for",
-                         "display",
-                         "abort",
-                         "while",
-                         "execute",
-                         "solve",
-                         "loop",
-                         "repeat"])
+include("consts.jl")
 
-# Functions used in GAMS expressions
-gamsfuncs = quote
-    sqr(x) = x*x
-    POWER(x,p) = x^p
-    power(x,p) = x^p
-    arctan(x) = atan(x)
+# Missing peekchar method
+@inline function get_next_char(p::Ptr{UInt8}, i::Int, len::Int)
+    b = unsafe_load(p, i)
+    if b < 0x80
+        return Char(b)
+    end
+    c, i = Base.slow_utf8_next(p, b, i, len)
+    return c
+end
+function peekchar(io::IOBuffer)
+    i, len = io.ptr, io.size
+    i > len && Base.throw_boundserror(io, i)
+    return get_next_char(pointer(io.data), i, len)
+end
+peekchar(io) = Base.peekchar(io)
+
+# Similar to readuntil, but stops before adding any char appearing in delim
+function readupto(io::IO, delim)
+    out = IOBuffer()
+    c = '\0'
+    while !eof(io)
+        c = read(io, Char)
+        if c ∈ delim
+            break
+        end
+        write(out, c)
+    end
+    return String(take!(out)), c
 end
 
-# Translations of GAMS functions to Julia functions
-const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum)
+function eatws(io::IO)
+    eof(io) && return io
+    c = peekchar(io)
+    while isspace(c) && !eof(io)
+        read(io, Char)
+        c = peekchar(io)
+    end
+    io
+end
 
 ## parsing
+const tokbreak   = [' ','\n','\r']
+const stmtbreak  = [tokbreak; ';']
+const entrybreak = [',',';']
+const slashbreak = ['/', ',', '\n', '\r']
+const itembreak  = [slashbreak; ' ']
+
 function parsegams(file)
     gams = Dict{String,Any}()
-    neqs = 0
-    lastdecl = ""
     open(file) do io
         while !eof(io)
-            c = Base.peekchar(io)
+            c = peekchar(io)
             if c == '*' || c == '$' || c == '\n' || c == '\r'
                 # Comment line
                 readline(io)
                 continue
             end
-            block = strip(readuntil(io, ';'))
-            isempty(block) && break
-            tok, rest = splitws(block; rmsemicolon=true)
-            tok = lowercase(tok)
-            if tok ∈ gamsdecls
-                lastdecl = tok
-            elseif tok ∈ gamsactions
-                lastdecl = ""
-            else
-                rest = tok*" "*rest # restore for future parsing
-            end
-            rest = replace_charints(rest)
-            if lastdecl == "set" || lastdecl == "sets"
-                if !haskey(gams, "Sets")
-                    gams["Sets"] = Dict{String,String}()
-                end
-                sets = gams["Sets"]
-                lines = strip.(split(rest, '\n'; keep=false))
-                for line in lines
-                    sym, rng = split(line)
-                    sets[sym] = rng
-                end
-            elseif lastdecl == "alias"
-                ex = parse(rest)
-                @assert(ex.head == :tuple && length(ex.args) == 2)
-                symold, symnew = ex.args
-                sets[string(symnew)] = sets[string(symold)]
-            elseif lastdecl == "scalar" || lastdecl == "scalars"
-                if !haskey(gams, "Scalars")
-                    gams["Scalars"] = Dict{String,String}()
-                end
-                scalars = gams["Scalars"]
-                parseparameters!(scalars, rest)
-            elseif lastdecl == "variable" || lastdecl == "variables"
-                if tok ∈ ("free", "positive", "negative", "binary", "integer")  # not yet handled
-                    continue
-                end
-                m = match(r"=", rest)
-                if m == nothing
-                    vars = strip.(split(rest, r"[,\n]"))
-                    gams["Variables"] = filter(x->!isempty(x), vars)
-                else
-                    if !haskey(gams, "Parameters")
-                        gams["Parameters"] = OrderedDict{String,String}()
+            eatws(io)
+            tok, term = lowercase(readupto(io, stmtbreak))
+            isempty(tok) && continue
+            while true
+                if tok == "set" || tok == "sets"
+                    sets = getdefault!(gams, "Sets")
+                    tok = lowercase(parse_slashed!(sets, io))
+                elseif tok == "alias"
+                    ex = parse(rest)
+                    @assert(ex.head == :tuple && length(ex.args) == 2)
+                    symold, symnew = ex.args
+                    sets = gams["Sets"]
+                    sets[string(symnew)] = sets[string(symold)]
+                elseif tok == "scalar" || tok == "scalars" || tok == "parameter" || tok == "parameters"
+                    params = getdefault!(gams, "Parameters")  # store scalars as parameters
+                    idx = 1
+                    while idx <= length(rest)
+                        name, text, brack, idx = parse_slashed(rest, idx)
+                        if name ∈ gamskws
+                            tok, rest = splittok(rest)
+                            break
+                        end
+                        params[name] = brack
                     end
-                    parseparameters!(gams["Parameters"], rest)
-                end
-            elseif lastdecl == "equation" || lastdecl == "equations"
-                gams["Equations"] = eqs = Pair{String,String}[]
-                eqnames = strip.(split(rest, r"[,\n]"))
-                for eq in eqnames  # this is just a counter, because the order isn't guaranteed
-                    eqstr = replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' ')
-                    eqex = replace_logical(replace_pow(replace_charints(eqstr)))
-                    push!(eqs, stripname(eqex))
-                    neqs += 1
-                end
-                lastdecl = ""
-            elseif lastdecl == "parameters" || lastdecl == "parameter"
-                if !haskey(gams, "Parameters")
-                    gams["Parameters"] = OrderedDict{String,String}()
-                end
-                params = gams["Parameters"]
-                if match(r"\n", rest) != nothing && match(r"/", rest) == nothing
-                    rest = strip.(split(rest, '\n'))
-                    for str in rest
-                        parseparameters!(params, str)
+                elseif tok == "table"
+                    table = getdefault!(gams, "Table")
+                    m = match(r"\n", rest)  # the EOL marks the beginning of the table proper
+                    name, text = splitws(rest[1:prevind(rest, m.offset)])
+                    idx = nextind(rest, m.offset)
+                    table[name] = rest[idx:end]
+                elseif tok == "variable" || tok == "variables" || tok ∈ varattributes
+                    attr = "free"
+                    if tok ∈ varattributes
+                        attr = tok
+                        tok, rest = splittok(rest)
                     end
-                else
-                    parseparameters!(params, rest)
+                    variables = getdefault!(gams, "Varibles")
+
+                    m = match(r"=", rest)
+                    if m == nothing
+                        vars = strip.(split(rest, r"[,\n]"))
+                        gams["Variables"] = filter(x->!isempty(x), vars)
+                    else
+                        if !haskey(gams, "Parameters")
+                            gams["Parameters"] = OrderedDict{String,String}()
+                        end
+                        parseparameters!(gams["Parameters"], rest)
+                    end
+                elseif lastdecl == "equation" || lastdecl == "equations"
+                    gams["Equations"] = eqs = Pair{String,String}[]
+                    eqnames = strip.(split(rest, r"[,\n]"))
+                    for eq in eqnames  # this is just a counter, because the order isn't guaranteed
+                        eqstr = replace(strip(readuntil(io, ';')), r"[\t\n\r]", ' ')
+                        eqex = replace_logical(replace_pow(replace_charints(eqstr)))
+                        push!(eqs, stripname(eqex))
+                        neqs += 1
+                    end
+                    lastdecl = ""
+                elseif tok == "solve"
+                    words = split(rest)
+                    @assert words[end-1] == "minimizing" || words[end-1] == "maximizing"
+                    gams[words[end-1]] = words[end][1:end]
                 end
-            elseif lastdecl == "table"
-                if !haskey(gams, "Table")
-                    gams["Table"] = Dict{String,String}()
-                end
-                sym, vals = splitws(rest)
-                gams["Table"][sym] = vals
-            elseif tok == "solve"
-                words = split(rest)
-                @assert words[end-1] == "minimizing" || words[end-1] == "maximizing"
-                gams[words[end-1]] = words[end][1:end]
             end
         end
     end
@@ -227,6 +225,102 @@ function parsegams(::Type{Module}, filename::AbstractString)
     return parsegams(Module, Symbol(bname), gams)
 end
 
+# function skiptext(io::IO)
+#     c = peekchar(io)
+#     if c == '"'
+#         # Skip over text
+#         read(io, Char)
+#         readuntil(io, '"')
+#         eatws(io)
+#         c = peekchar(io)
+#     end
+#     return c
+# end
+
+function skiptext(io::IO, term)
+    c = peekchar(io)
+    while !eof(io)
+        c ∈ term && return c
+        if c == '"'
+            # Skip over text between quotes
+            read(io, Char)
+            readuntil(io, '"')
+            eatws(io)
+            return peekchar(io)
+        end
+        if isspace(c)
+            read(io, Char)
+            c = peekchar(io)
+            continue
+        end
+        readupto(io, (',', '/'))
+        eatws(io)
+        return eof(io) ? '\0' : peekchar(io)
+    end
+    return c
+end
+
+# For parsing objects that use / / delimiters (sets, parameters, scalars)
+function parse_slashed!(io::IO, dest)
+    while !eof(io)
+        name, term = readupto(io, tokbreak)
+        if name ∈ gamskws
+            return lowercase(name)
+        end
+        if term == ';' || name == ";"
+            @assert(isempty(name) || name == ";")
+            return ""
+        end
+        elems = String[]
+        c = skiptext(io, slashbreak)
+        if c == '/'
+            read(io, Char)
+            eatws(io)
+            while true
+                item, itemterm = readupto(io, itembreak)
+                isempty(item) && error("empty item")
+                push!(elems, strip(item))
+                itemterm == '/' && break
+                itemterm ∈ (',', '\r', '\n') && (eatws(io); continue)
+                isspace(itemterm) || error("unexpected terminator ", itemterm)
+                c = skiptext(io, slashbreak)
+                c == '\0' && break
+                c == '/' && (read(io, Char); break)
+                c == ',' && (read(io, Char); eatws(io))
+            end
+        end
+        dest[name] = elems
+        eatws(io)
+    end
+    return ""
+end
+
+function parse_slashed(str, idx)
+    mbeg = match(r"/", str, idx)
+    if mbeg == nothing
+        # Is this a name-only decl? What if it's more than one split across lines?
+        mend = match(r"\n", str, idx)
+        iend = mend == nothing ? length(str) : prevind(str, mend.offset)
+        name, text = splitws(str[idx:iend])
+        idx = mend == nothing ? length(str)+1 : nextind(str, mend.offset)
+        idx = skipws(str, idx)
+        return name, text, "", idx
+    end
+    idxnext = nextind(str, mbeg.offset)
+    mend = match(r"/", str, idxnext)
+    @assert mend != nothing
+    name, text = splitws(str[idx:prevind(str, mbeg.offset)])
+    idx = skipws(str, nextind(str, mend.offset))
+    return name, text, str[mbeg.offset:mend.offset], idx
+end
+
+function skipws(str, idx)
+    while idx <= length(str) && isspace(str[idx])
+        idx = nextind(str, idx)
+    end
+    return idx
+end
+
 function parseparameters!(dest, rest)
     m = match(r"=", rest)
     if m === nothing
@@ -257,6 +351,11 @@ function splitws(str; rmsemicolon::Bool=false)
     m = match(r"\s", str)
     m == nothing && return str, ""
     return str[1:m.offset-1], strip(str[m.offset:iend])
+end
+
+function splittok(str; rmsemicolon::Bool=false)
+    tok, rest = splitws(str; rmsemicolon=rmsemicolon)
+    return lowercase(tok, rest)
 end
 
 function stripname(eqstr)
@@ -449,8 +548,6 @@ function calls2refs(str::AbstractString, vars)
     return calls2refs!(ex, vars)
 end
 
-const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
-
 function parseassign(eqex, vars; loop=nothing)
     if endswith(eqex, ';')
         eqex = eqex[1:end-1]
@@ -572,6 +669,13 @@ function replaceexprs!(ex::Expr)
 end
 replaceexprs!(ex) = ex
 
+function getdefault!(gams, tag)
+    if !haskey(gams, tag)
+        gams[tag] = Dict{String,String}()
+    end
+    return gams[tag]
+end
+
 ## Converting =g= and =l= (> and <) "constraints" into min/max statements
 const sentinelval = Dict(:> => -Inf, :< => Inf)
 
@@ -604,79 +708,5 @@ function find_index_usage(ex::Expr, indexsym)
     return :missing, 0, false
 end
 find_index_usage(ex, indexsym) = :missing, 0, false
-
-# Full list of GAMS keywords, in case it's useful:
-const gamskws = ["abort",
-                 "acronym",
-                 "acronyms",
-                 "alias",
-                 "all",
-                 "and",
-                 "assign",
-                 "binary",
-                 "card",
-                 "diag",
-                 "display",
-                 "else",
-                 "eps",
-                 "eq",
-                 "equation",
-                 "equations",
-                 "file",
-                 "files",
-                 "for",
-                 "free",
-                 "ge",
-                 "gt",
-                 "if",
-                 "inf",
-                 "integer",
-                 "le",
-                 "loop",
-                 "lt",
-                 "maximizing",
-                 "minimizing",
-                 "model",
-                 "models",
-                 "na",
-                 "ne",
-                 "negative",
-                 "no",
-                 "not",
-                 "option",
-                 "options",
-                 "or",
-                 "ord",
-                 "parameter",
-                 "parameters",
-                 "positive",
-                 "prod",
-                 "putpage",
-                 "puttl",
-                 "repeat",
-                 "sameas",
-                 "scalar",
-                 "scalars",
-                 "semicont",
-                 "semiint",
-                 "set",
-                 "sets",
-                 "smax",
-                 "smin",
-                 "solve",
-                 "sos1",
-                 "sos2",
-                 "sum",
-                 "system",
-                 "table",
-                 "then",
-                 "until",
-                 "using",
-                 "variable",
-                 "variables",
-                 "while",
-                 "xor",
-                 "yes"]
-
 
 end # module
