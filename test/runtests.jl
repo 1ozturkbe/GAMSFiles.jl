@@ -4,38 +4,50 @@ using GAMSParse
 using Base.Test
 
 ## Low-level syntax
+lextest(str) = GAMSParse.lex(IOBuffer(str))
+
+@test lextest("123") == GAMSParse.AbstractLex[GAMSParse.GNumber(123)]
+@test lextest("123.0") == GAMSParse.AbstractLex[GAMSParse.GNumber(123.0)]
+@test lextest("123.0e-5") == GAMSParse.AbstractLex[GAMSParse.GNumber(123.0e-5)]
+lexed = lextest("x.l('1')")
+@test lexed == GAMSParse.AbstractLex[GAMSParse.GText("x"), GAMSParse.Dots("."), GAMSParse.GArray("l", ("'1'",))]
+# Because == for GArrays ignores indices, check explicitly
+@test lexed[3].indices == ("'1'",)
+@test lextest("x=0") == GAMSParse.AbstractLex[GAMSParse.GText("x"), GAMSParse.GText("="), GAMSParse.GNumber(0)]
+@test lextest("x=E=0") == GAMSParse.AbstractLex[GAMSParse.GText("x"), GAMSParse.GText("=E="), GAMSParse.GNumber(0)]
+
 function slashtest!(dest, str)
     empty!(dest)
     io = seekstart(IOBuffer(str))
-    GAMSParse.parse_slashed!(io, dest)
+    GAMSParse.parse_slashed!(dest, GAMSParse.lex(io), 1)
     return dest
 end
 
 dest = Dict{String,Vector{String}}()
-slashtest!(dest, "name /1*2/")
+slashtest!(dest, "set name /1*2/")
 @test length(dest) == 1 && dest["name"] == ["1*2"]
-slashtest!(dest, "name /1*2/;")
+slashtest!(dest, "sets name /1*2/;")
 @test length(dest) == 1 && dest["name"] == ["1*2"]
-slashtest!(dest, "name \"dollars/ounce\" /1*2/")
+slashtest!(dest, "sets name \"dollars/ounce\" /1*2/")
 @test length(dest) == 1 && dest["name"] == ["1*2"]
-slashtest!(dest, "name \"dollars per ounce\" /1*2/")
+slashtest!(dest, "set name \"dollars per ounce\" /1*2/;")
 @test length(dest) == 1 && dest["name"] == ["1*2"]
-slashtest!(dest, "name /a, b, c/")
+slashtest!(dest, "set name /a, b, c/")
 @test length(dest) == 1 && dest["name"] == ["a", "b", "c"]
-slashtest!(dest, "name /a \"apple\", b \"banana\", c \"carrot\"/")
+slashtest!(dest, "set name /a \"apple\", b \"banana\", c \"carrot\"/")
 @test length(dest) == 1 && dest["name"] == ["a", "b", "c"]
-slashtest!(dest, "name /a apple, b banana, c carrot/")
+slashtest!(dest, "set name /a apple, b banana, c carrot/")
 @test length(dest) == 1 && dest["name"] == ["a", "b", "c"]
-slashtest!(dest, "a /1*2/\n  b   / 1*3 /")
+slashtest!(dest, "sets a /1*2/\n  b   / 1*3 /")
 @test length(dest) == 2 && dest["a"] == ["1*2"] && dest["b"] == ["1*3"]
-slashtest!(dest, "a /1*2/\n  b   / 1*3 /;")
+slashtest!(dest, "sets a /1*2/\n  b   / 1*3 /;")
 @test length(dest) == 2 && dest["a"] == ["1*2"] && dest["b"] == ["1*3"]
 # Some examples from the manual (chapter on sets)
-slashtest!(dest, "cq \"nutrients\" / N, P2O5 / ;")
+slashtest!(dest, "set cq \"nutrients\" / N, P2O5 / ;")
 @test length(dest) == 1 && dest["cq"] == ["N", "P2O5"]
-slashtest!(dest, "cq \"nutrients\" / N\n   P2O5 / ;")
+slashtest!(dest, "set cq \"nutrients\" / N\n   P2O5 / ;")
 @test length(dest) == 1 && dest["cq"] == ["N", "P2O5"]
-slashtest!(dest, """
+slashtest!(dest, """set
 f         "final products"
 /yncrude         "refined crude (million barrels)"
 lpg                "liquified petroleum gas(million barrels)"
@@ -45,7 +57,7 @@ sulfur          "sulfur (million tons)"
 /;
 """)
 @test length(dest) == 1 && dest["f"] == ["yncrude", "lpg", "ammonia", "coke", "sulfur"]
-slashtest!(dest, """
+slashtest!(dest, """sets
 s   "Sector"    /  manuf
                    agri
                    services

@@ -71,6 +71,16 @@ const gamskws = Set(["abort",
                      "xor",
                      "yes"])
 
+const stdkws = Dict("acronym"=>"acronyms",
+                    "equation"=>"equations",
+                    "file"=>"files",
+                    "model"=>"models",
+                    "option"=>"options",
+                    "parameter"=>"parameters",
+                    "scalar"=>"scalars",
+                    "set"=>"sets",
+                    "variable"=>"variables")
+
 # Declarations
 const gamsdecls = Set(["acronym", "acronyms",
                        "alias",
@@ -94,6 +104,28 @@ const gamsactions = Set(["option", "options",
                          "loop",
                          "repeat"])
 
+const vartypes = ("free", "positive", "negative", "binary", "integer")
+
+const varattributes = ("lo", "hi", "fx", "l", "m", "scale", "prior")
+
+const modelattributes = Set(["bratio",
+                             "domlim",
+                             "holdfixed",
+                             "iterlim",
+                             "limcol",
+                             "limrow",
+                             "optca",
+                             "optcr",
+                             "optfile",
+                             "reslim",
+                             "scaleopt",
+                             "solprint",
+                             "solveopt",
+                             "sysout",
+                             "workspace"])
+
+const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
+
 # Functions used in GAMS expressions
 const gamsfuncs = quote
     sqr(x) = x*x
@@ -105,7 +137,10 @@ end
 # Translations of GAMS functions to Julia functions
 const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum, :smin=>:minimum)
 
-const varattributes = ("free", "positive", "negative", "binary", "integer")
-
-const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
-
+## parsing
+const tokbreak   = [' ','\n','\r']
+const stmtbreak  = [tokbreak; ';']
+const entrybreak = [',',';']
+const slashbreak = ['/', ',', '\n', '\r']
+const itembreak  = [slashbreak; ' ']
+# const itembreak  = ['/', ',']
