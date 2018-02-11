@@ -127,21 +127,16 @@ const funcnames = Set(["errorf",
                        "cos",
                        "sin"])
 
+const funcsubst = Dict(["power"=>"^",
+                        "arctan"=>"atan"])
+
 # Functions used in GAMS expressions
 const gamsfuncs = quote
     sqr(x) = x*x
-    POWER(x,p) = x^p
-    power(x,p) = x^p
-    arctan(x) = atan(x)
+    errorf(x) = 0.5 * (1 + erf(x))
+    normal(x,y) = y*randn() + x
+    uniform(x,y) = (y-x)*rand() + x
 end
 
 # Translations of GAMS functions to Julia functions
 const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum, :smin=>:minimum)
-
-## parsing
-const tokbreak   = [' ','\n','\r']
-const stmtbreak  = [tokbreak; ';']
-const entrybreak = [',',';']
-const slashbreak = ['/', ',', '\n', '\r']
-const itembreak  = [slashbreak; ' ']
-# const itembreak  = ['/', ',']
