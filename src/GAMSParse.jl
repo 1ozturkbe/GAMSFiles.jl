@@ -16,6 +16,7 @@ function parseconsts!(gams::Dict{String,Any})
     if haskey(gams, "parameters")
         params = gams["parameters"]
         for (k, v) in params
+            isempty(v) && continue
             if k isa GArray
                 c = allocate(k, sets)
                 lines = strip.(split(v, '\n'))
@@ -35,7 +36,6 @@ function parseconsts!(gams::Dict{String,Any})
             c = allocate(key, sets)
             lines = split(v, '\n')
             firstrow = true
-            ends = Int[]
             cols = Int[]
             for line in lines
                 isempty(strip(line)) && continue
@@ -49,7 +49,6 @@ function parseconsts!(gams::Dict{String,Any})
                     while j <= length(line)
                         i, j = bracket_text(line, j)
                         if i <= length(line)
-                            push!(ends, j-1)
                             push!(cols, parse(Int, line[i:j-1]))
                         end
                     end
@@ -58,11 +57,9 @@ function parseconsts!(gams::Dict{String,Any})
                 end
                 i, j = bracket_text(line, 1)
                 row = parse(Int, line[i:j-1])
-                k = 1
-                while k <= length(cols)
-                    c[row,cols[k]] = parse(Float64, strip(line[j:ends[k]]))
-                    j = ends[k]+1
-                    k += 1
+                for k = 1:length(cols)
+                    i, j = bracket_text(line, j)
+                    c[row,cols[k]] = parse(Float64, line[i:j-1])
                 end
             end
             tables[key] = c
@@ -76,7 +73,7 @@ function bracket_text(line, i)
         i = nextind(line, i)
     end
     j = i
-    while j <= length(line) && !isspace(line[j])
+    while j <= length(line) && !isspace(line[j]) && (j == i || line[j] != '-')  # sometimes columns have no gap, use the sign as an indicator
         j = nextind(line, j)
     end
     i, j
