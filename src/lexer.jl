@@ -11,6 +11,11 @@ function lex(io::IO)
     lexed = AbstractLex[]
     buf = IOBuffer()
     pos = 1
+    lex!(io, buf, lexed, pos)
+    return lexed
+end
+
+function lex!(io, buf, lexed, pos, cterminate = '\0')
     inrelation = innumber = false
     while !eof(io)
         c = read(io, Char)
@@ -20,6 +25,13 @@ function lex(io::IO)
             continue
         end
         pos += 1
+        if c == cterminate
+            str = String(take!(buf))
+            if !isempty(str)
+                tag!(lexed, str)
+            end
+            return pos
+        end
         isopener = c ∈ openers
         if isdigit(c)
             if position(buf) == 0
@@ -47,13 +59,26 @@ function lex(io::IO)
         end
         if isopener
             pre = String(take!(buf))
-            if lowercase(pre) ∈ gamskws
-                push!(lexed, Keyword(lowercase(pre)))
-                pre = ""
+            prelc = lowercase(pre)
+            if prelc ∈ gamskws
+                push!(lexed, Keyword(prelc))
+                pre = prelc = ""
             end
-            write(buf, c)
-            pos = lex_delim(buf, io, closerdict[c], pos)
-            tag_delim!(lexed, pre * String(take!(buf)))
+            if (c == '(' || c == '[')
+                args = AbstractLex[]
+                pos = lex!(io, buf, args, pos, closerdict[c])
+                if c == '(' && prelc ∈ funcnames
+                    push!(lexed, GCall(prelc, (args...,)))
+                elseif isempty(pre)
+                    push!(lexed, Parens((args...,)))
+                else
+                    push!(lexed, GArray(pre, (args...,)))
+                end
+            else
+                write(buf, c)
+                pos = lex_delim(buf, io, closerdict[c], pos)
+                tag_delim!(lexed, pre * String(take!(buf)))
+            end
         elseif isspace(c)
             if c == '\n'
                 pos = 1
@@ -73,18 +98,6 @@ function lex(io::IO)
         elseif innumber && c ∈ ('+', '-', '.')
             write(buf, c)
         elseif c ∈ ('+', '-', '*', '/', '^', '=', '.')
-            # if position(buf) > 0
-            #     lc = lastuint8(buf)
-            #     if c ∈ ('+', '-') && (lc == UInt8('e') || lc == UInt8('E'))
-            #         # This is probably scientific notation, don't interrupt it
-            #         write(buf, c)
-            #         continue
-            #     elseif c == '.' && 0x30 <= lc <= 0x39
-            #         # Decimal point
-            #         write(buf, c)
-            #         continue
-            #     end
-            # end
             # Test for =E= and similar relations
             if inrelation
                 write(buf, c)
@@ -127,7 +140,7 @@ function lex(io::IO)
     if position(buf) > 0
         tag!(lexed, String(take!(buf)))
     end
-    return lexed
+    return pos
 end
 
 function lex_delim(buf, io, cmatch, pos)
@@ -137,11 +150,13 @@ function lex_delim(buf, io, cmatch, pos)
         pos += 1
         write(buf, c)
         c == cmatch && break
-        if c ∈ openers
-            pos = lex_delim(buf, io, closerdict[c], pos)
-            continue
+        if cmatch ∉ ('"', '\'')  # text in quotes should not be interpreted
+            if c ∈ openers       # use recursion to ensure balanced parens
+                pos = lex_delim(buf, io, closerdict[c], pos)
+                continue
+            end
+            c ∈ closers && break
         end
-        c ∈ closers && break
     end
     c == cmatch && return pos
     c ∈ closers && error("closing got $c, wanted $cmatch. Rest of line:\n", readline(io))
@@ -156,7 +171,7 @@ function tag_delim!(lexed, str)
         return push!(lexed, GArray(m.captures[1], (strip.(split(m.captures[2], ','))...,)))
     end
     f, l = str[1], str[end]
-    if f == l == '"'
+    if f == l == '"' || f == l == '\''
         return push!(lexed, GText(str[2:end-1]))
     elseif f == l == '/'
         return push!(lexed, Slashed(strip(str[2:end-1])))

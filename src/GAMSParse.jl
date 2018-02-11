@@ -106,7 +106,7 @@ end
 function getaxes(setnames, sets)
     axs = []
     for name in setnames
-        s = sets[name]
+        s = sets[string(name)]
         push!(axs, s isa UnitRange ? s : Base.OneTo(length(s)))
     end
     (axs...,)

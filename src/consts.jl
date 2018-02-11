@@ -81,29 +81,6 @@ const stdkws = Dict("acronym"=>"acronyms",
                     "set"=>"sets",
                     "variable"=>"variables")
 
-# Declarations
-const gamsdecls = Set(["acronym", "acronyms",
-                       "alias",
-                       "equation", "equations",
-                       "model", "models",
-                       "parameter", "parameters",
-                       "scalar", "scalars",
-                       "set", "sets",
-                       "table",
-                       "variable", "variables"])
-
-# Actions
-const gamsactions = Set(["option", "options",
-                         "assign",
-                         "for",
-                         "display",
-                         "abort",
-                         "while",
-                         "execute",
-                         "solve",
-                         "loop",
-                         "repeat"])
-
 const vartypes = ("free", "positive", "negative", "binary", "integer")
 
 const varattributes = ("lo", "up", "fx", "l", "m", "scale", "prior")
@@ -125,6 +102,30 @@ const modelattributes = Set(["bratio",
                              "workspace"])
 
 const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
+
+# From table 6.1 in the manual
+const funcnames = Set(["errorf",
+                       "exp",
+                       "log",
+                       "log10",
+                       "normal",
+                       "uniform",
+                       "abs",
+                       "ceil",
+                       "floor",
+                       "mapval",
+                       "max",
+                       "min",
+                       "mod",
+                       "power",
+                       "round",
+                       "sign",
+                       "sqr",
+                       "sqrt",
+                       "trunc",
+                       "arctan",
+                       "cos",
+                       "sin"])
 
 # Functions used in GAMS expressions
 const gamsfuncs = quote

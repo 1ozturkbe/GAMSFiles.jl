@@ -27,11 +27,9 @@ function parsegams(lexed::Vector{AbstractLex})
                 end
             elseif kwname == "alias"
                 alias = lexed[i+=1]
-                @assert(alias isa GText)
-                ex = parse(alias.text)
-                @assert(ex.head == :tuple && length(ex.args) == 2)
+                @assert(alias isa Parens && length(alias.args) == 2)
                 sets = gams["sets"]
-                symold, symnew = string.(ex.args)
+                symold, symnew = string.(alias.args)
                 if !haskey(sets, symold)  # GAMS allows arbitrary ordering
                     symnew, symold = symold, symnew
                 end
@@ -118,33 +116,35 @@ function parsegams(lexed::Vector{AbstractLex})
             if lexed[i+1] == Dots("..")
                 # an equation definition
                 eqs = getdefault!(gams, "equations", Dict{Any,Any})
-                str, i = recombine(lexed, i+=1)
-                eqs[stmt] = replace_pow(replace_logical(replace_charints(replace(str, r"[\r\n]", s" "))))
+                iend = seek_to_end(lexed, i+=2)
+                eqs[stmt] = lexed[i:iend]
+                i = iend
             elseif lexed[i+1] == Dots(".")
                 # a variable or model attribute
                 @assert(lexed[i+3] == GText("="))
                 attr = lexed[i+=2]
-                i += 1
-                str, i = recombine(lexed, i)
+                iend = seek_to_end(lexed, i+=2)
+                rhs = lexed[i:iend]
                 if attr isa GText && string(attr) ∈ modelattributes
                     m = gams["models"][string(stmt)]
-                    m.assignments[string(attr)] = str
+                    m.assignments[string(attr)] = rhs
                 else
                     attrstr = isa(attr, GText) ? string(attr) : attr.name
                     varkey = isa(attr, GText) ? stmt : GArray(string(stmt), attr.indices)
                     if attrstr ∈ varattributes
-                        v = gams["variables"][varkey]
-                        push!(v.assignments, attr=>str)
+                        v = gams["variables"][varkey]  # gams["variables"][stmt] ?
+                        push!(v.assignments, attr=>lexed[i:iend])
                     else
                         error(attr, " not a recognized attribute")
                     end
                 end
+                i = iend
             else
                 @assert lexed[i+1] == GText("=")
-                i += 1
-                expr, i = recombine(lexed, i)
-                assign = getdefault!(gams, "assignments", Vector{Pair{Any,String}})
-                push!(assign, stmt=>expr)
+                iend = seek_to_end(lexed, i+=1)
+                assign = getdefault!(gams, "assignments", Vector{Pair{Any,Any}})
+                push!(assign, stmt=>lexed[i:iend])
+                i = iend
             end
         end
         i += 1
@@ -194,6 +194,14 @@ function varinfo(name::GText, attr, sets)
 end
 function varinfo(name::GArray, attr, sets)
     return name=>VarInfo(attr, getaxes(name.indices, sets))
+end
+
+function seek_to_end(lexed, i)
+    iend = i
+    while iend < length(lexed) && lexed[iend+1] != StatementEnd()
+        iend += 1
+    end
+    return iend
 end
 
 function recombine(lexed, i)

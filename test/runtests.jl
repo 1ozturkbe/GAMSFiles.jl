@@ -12,7 +12,7 @@ lextest(str) = GAMSParse.lex(IOBuffer(str))
 lexed = lextest("x.l('1')")
 @test lexed == GAMSParse.AbstractLex[GAMSParse.GText("x"), GAMSParse.Dots("."), GAMSParse.GArray("l", ("'1'",))]
 # Because == for GArrays ignores indices, check explicitly
-@test lexed[3].indices == ("'1'",)
+@test lexed[3].indices == (GAMSParse.GText("1"),)
 @test lextest("x=0") == GAMSParse.AbstractLex[GAMSParse.GText("x"), GAMSParse.GText("="), GAMSParse.GNumber(0)]
 @test lextest("x=E=0") == GAMSParse.AbstractLex[GAMSParse.GText("x"), GAMSParse.GText("=E="), GAMSParse.GNumber(0)]
 
