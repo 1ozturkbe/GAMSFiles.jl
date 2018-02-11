@@ -207,7 +207,7 @@ function lex_table!(buf, io, lexed, pos)
         if isspace(c)
             str = String(take!(buf))
             m = matcharray(str)
-            array = GArray(m.captures[1], (strip.(split(m.captures[2], ','))...,))
+            array = GArray(m.captures[1], (GText.(strip.(split(m.captures[2], ',')))...,))
             break
         end
         write(buf, c)

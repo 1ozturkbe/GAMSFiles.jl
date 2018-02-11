@@ -38,7 +38,7 @@ function parsegams(lexed::Vector{AbstractLex})
                 params = getdefault!(gams, "parameters", Dict{Any,Any})
                 i = parse_slashed!(params, lexed, i; parseitems=false)
             elseif kwname == "table"
-                table = getdefault!(gams, "tables", Dict{Any,String})
+                table = getdefault!(gams, "tables", Dict{Any,Any})
                 item = lexed[i+=1]
                 table[item.name] = item.body
             elseif kwname == "variables" || kwname ∈ vartypes
@@ -198,24 +198,8 @@ end
 
 function seek_to_end(lexed, i)
     iend = i
-    while iend < length(lexed) && lexed[iend+1] != StatementEnd()
+    while iend < length(lexed) && !isa(lexed[iend+1], Union{StatementEnd, Keyword})
         iend += 1
     end
     return iend
-end
-
-function recombine(lexed, i)
-    # Recombine all the text up to the next StatementEnd
-    str = ""
-    part = lexed[i+=1]
-    while !isa(part, StatementEnd)
-        if part isa Union{GText,GArray,GNumber}
-            str *= string(part)
-        elseif part ∈ (Keyword("smax"), Keyword("smin"), Keyword("sum"))
-        else
-            error("got ", str, "\n  but don't know what to do with ", part)
-        end
-        part = lexed[i+=1]
-    end
-    return str, i
 end

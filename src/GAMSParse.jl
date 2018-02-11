@@ -11,6 +11,82 @@ include("io.jl")
 include("lexer.jl")
 include("parser.jl")
 
+function parseconsts!(gams::Dict{String,Any})
+    sets = get(gams, "sets", nothing)
+    if haskey(gams, "parameters")
+        params = gams["parameters"]
+        for (k, v) in params
+            if k isa GArray
+                c = allocate(k, sets)
+                lines = strip.(split(v, '\n'))
+                for line in lines
+                    ln = split(line)
+                    @assert(length(ln) == 2)
+                    c[parse(Int, ln[1])] = parse(Float64, ln[2])
+                end
+                params[k] = c
+            end
+        end
+    end
+    if haskey(gams, "tables")
+        tables = gams["tables"]
+        for (key, v) in tables
+            @assert(key isa GArray)
+            c = allocate(key, sets)
+            lines = split(v, '\n')
+            firstrow = true
+            ends = Int[]
+            cols = Int[]
+            for line in lines
+                isempty(strip(line)) && continue
+                if line[1] == '+'
+                    firstrow = true
+                end
+                if firstrow
+                    empty!(cols)
+                    # Identify the locations of the column ends (labels are right-justified)
+                    j = 2
+                    while j <= length(line)
+                        i, j = bracket_text(line, j)
+                        if i <= length(line)
+                            push!(ends, j-1)
+                            push!(cols, parse(Int, line[i:j-1]))
+                        end
+                    end
+                    firstrow = false
+                    continue
+                end
+                i, j = bracket_text(line, 1)
+                row = parse(Int, line[i:j-1])
+                k = 1
+                while k <= length(cols)
+                    c[row,cols[k]] = parse(Float64, strip(line[j:ends[k]]))
+                    j = ends[k]+1
+                    k += 1
+                end
+            end
+            tables[key] = c
+        end
+    end
+    gams
+end
+
+function bracket_text(line, i)
+    while i <= length(line) && isspace(line[i])
+        i = nextind(line, i)
+    end
+    j = i
+    while j <= length(line) && !isspace(line[j])
+        j = nextind(line, j)
+    end
+    i, j
+end
+
+# Next:
+#  - handle assignments (const and expr-generating)
+#  - mash together the objective
+#  - module creation
+
 """
     modex = parsegams(Module, modname, gams)
     modex = parsegams(Module, filename)
@@ -130,34 +206,14 @@ end
 #     error("must have sets for variable style ", name)
 # end
 
+allocate(array::GArray, sets) = allocate(array.indices, sets)
+
 function allocate(setnames, sets)
     axs = getaxes(setnames, sets)
     axs isa Tuple{} && return 0.0
     axs isa Tuple{Base.OneTo{Int},Vararg{Base.OneTo{Int}}} &&
         return Array{Float64}(uninitialized, length.(axs))
     return OffsetArray{Float64}(uninitialized, axs)
-end
-
-function parseparameters!(dest, rest)
-    m = match(r"=", rest)
-    if m === nothing
-        sym, vals = splitws(rest)
-        if isempty(vals)
-            # This is a "size" declaration
-            dest[sym] = ""
-        else
-            if !isempty(vals) && vals[1] == vals[end] == '/'
-                vals = strip(vals[2:end-1])
-            end
-            if !isempty(vals)
-                dest[sym] = vals
-            end
-        end
-    else
-        lhs, rhs = strip(rest[1:m.offset-1]), strip(rest[m.offset+1:end])
-        dest[lhs] = rhs
-    end
-    return dest
 end
 
 function splitws(str; rmsemicolon::Bool=false)

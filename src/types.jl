@@ -70,7 +70,7 @@ _hash(x::Slashed, h::UInt) = hash(x.text, hash(5, h))
 _hash(x::GNumber, h::UInt) = hash(x.val, hash(6, h))
 _hash(x::Dots, h::UInt)    = hash(x.text, hash(7, h))
 _hash(x::GCall, h::UInt)   = hash(x.args, hash(x.name, hash(8, h)))
-_hash(x::GCall, h::UInt)   = hash(x.args, hash(9, h))
+_hash(x::Parens, h::UInt)  = hash(x.args, hash(9, h))
 _hash(x::StatementEnd, h::UInt) = hash(10, h)
 
 Base.convert(::Type{String}, l::Union{Keyword,GText,Slashed}) = l.text
