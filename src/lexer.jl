@@ -46,9 +46,14 @@ function lex(io::IO)
             end
         end
         if isopener
+            pre = String(take!(buf))
+            if lowercase(pre) ∈ gamskws
+                push!(lexed, Keyword(lowercase(pre)))
+                pre = ""
+            end
             write(buf, c)
             pos = lex_delim(buf, io, closerdict[c], pos)
-            tag_delim!(lexed, String(take!(buf)))
+            tag_delim!(lexed, pre * String(take!(buf)))
         elseif isspace(c)
             if c == '\n'
                 pos = 1

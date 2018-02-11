@@ -101,16 +101,20 @@ function parsegams(lexed::Vector{AbstractLex})
                 while !isa(newkw, StatementEnd)
                     newkw = lexed[i+=1]
                 end
-            # elseif kwname ∈ Set()
-            #     newkw = lexed[i+=1]
-            #     while !isa(newkw, StatementEnd)
-            #         newkw = lexed[i+=1]
-            #     end
+            elseif kwname ∈ Set(["display"])
+                newkw = lexed[i+=1]
+                while !isa(newkw, StatementEnd)
+                    newkw = lexed[i+=1]
+                end
             else
                 error("unhandled keyword ", kwname)
             end
         else
             @assert(stmt isa GText || stmt isa GArray)
+            if length(lexed) < i+1
+                println("skipping trailing ", stmt)
+                return gams  # some files seem to have junk after the last semicolon
+            end
             if lexed[i+1] == Dots("..")
                 # an equation definition
                 eqs = getdefault!(gams, "equations", Dict{Any,Any})
@@ -118,8 +122,8 @@ function parsegams(lexed::Vector{AbstractLex})
                 eqs[stmt] = replace_pow(replace_logical(replace_charints(replace(str, r"[\r\n]", s" "))))
             elseif lexed[i+1] == Dots(".")
                 # a variable or model attribute
+                @assert(lexed[i+3] == GText("="))
                 attr = lexed[i+=2]
-                @assert(lexed[i+1] == GText("="))
                 i += 1
                 str, i = recombine(lexed, i)
                 if attr isa GText && string(attr) ∈ modelattributes
@@ -199,6 +203,7 @@ function recombine(lexed, i)
     while !isa(part, StatementEnd)
         if part isa Union{GText,GArray,GNumber}
             str *= string(part)
+        elseif part ∈ (Keyword("smax"), Keyword("smin"), Keyword("sum"))
         else
             error("got ", str, "\n  but don't know what to do with ", part)
         end

@@ -106,7 +106,7 @@ const gamsactions = Set(["option", "options",
 
 const vartypes = ("free", "positive", "negative", "binary", "integer")
 
-const varattributes = ("lo", "hi", "fx", "l", "m", "scale", "prior")
+const varattributes = ("lo", "up", "fx", "l", "m", "scale", "prior")
 
 const modelattributes = Set(["bratio",
                              "domlim",
