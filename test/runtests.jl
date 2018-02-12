@@ -217,69 +217,67 @@ end
     @test z ≈ fill(1/sqrt(2), 1:5, 2:4)
 end
 
-@testset "parseequations" begin
+@testset "eqs2assigns" begin
     sets = Dict("i" => Base.OneTo(5), "j" => 2:4)
     vars = Dict("x" => nothing, "y" => nothing)
     # Test that equations get turned into assignment statements
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x =e= 7")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x =e= 7")[1]], vars, sets)
     @test exprs == [:(x = 7)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("7 =e= x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("7 =e= x")[1]], vars, sets)
     @test exprs == [:(x = 7)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x =e= y")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x =e= y")[1]], vars, sets)
     @test exprs == [:(x = y)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("y =e= x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("y =e= x")[1]], vars, sets)
     @test exprs == [:(y = x)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x + z =e= 0")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x + z =e= 0")[1]], vars, sets)
     @test exprs == [:(x = 0 - z)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z + x =e= 0")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("z + x =e= 0")[1]], vars, sets)
     @test exprs == [:(x = 0 - z)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =e= z + x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 =e= z + x")[1]], vars, sets)
     @test exprs == [:(x = 0 - z)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =e= x + z")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 =e= x + z")[1]], vars, sets)
     @test exprs == [:(x = 0 - z)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x - z =e= 0")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x - z =e= 0")[1]], vars, sets)
     @test exprs == [:(x = 0 + z)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z - x =e= 0")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("z - x =e= 0")[1]], vars, sets)
     @test exprs == [:(x = z - 0)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =e= z - x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 =e= z - x")[1]], vars, sets)
     @test exprs == [:(x = z - 0)]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =e= x - z")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 =e= x - z")[1]], vars, sets)
     @test exprs == [:(x = 0 + z)]
 
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x =g= 7")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x =g= 7")[1]], vars, sets)
     @test exprs == [:(x = $(-Inf)), :(x = max(x, 7))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x =l= 7")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x =l= 7")[1]], vars, sets)
     @test exprs == [:(x = $Inf), :(x = min(x, 7))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("7 =g= x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("7 =g= x")[1]], vars, sets)
     @test exprs == [:(x = $Inf), :(x = min(x, 7))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("7 =l= x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("7 =l= x")[1]], vars, sets)
     @test exprs == [:(x = $(-Inf)), :(x = max(x, 7))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x =l= y")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x =l= y")[1]], vars, sets)
     @test exprs == [:(x = $Inf), :(x = min(x, y))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("y =l= x")[1]], vars, sets)
+    exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("y =l= x")[1]], vars, sets)
     @test exprs == [:(y = $Inf), :(y = min(y, x))]
 
     for (rel, f, g, sent) in (("=g=", :max, :min, -Inf), ("=l=", :min, :max, Inf))
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x + z $rel 0")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x + z $rel 0")[1]], vars, sets)
         @test exprs == [:(x = $sent), :(x = $f(x, 0 - z))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z + x $rel 0")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("z + x $rel 0")[1]], vars, sets)
         @test exprs == [:(x = $sent), :(x = $f(x, 0 - z))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel z + x")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 $rel z + x")[1]], vars, sets)
         @test exprs == [:(x = $(-sent)), :(x = $g(x, 0 - z))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel x + z")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 $rel x + z")[1]], vars, sets)
         @test exprs == [:(x = $(-sent)), :(x = $g(x, 0 - z))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x - z $rel 0")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("x - z $rel 0")[1]], vars, sets)
         @test exprs == [:(x = $sent), :(x = $f(x, 0 + z))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z - x $rel 0")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("z - x $rel 0")[1]], vars, sets)
         @test exprs == [:(x = $(-sent)), :(x = $g(x, z - 0))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel z - x")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 $rel z - x")[1]], vars, sets)
         @test exprs == [:(x = $sent), :(x = $f(x, z - 0))]
-        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel x - z")[1]], vars, sets)
+        exprs = GAMSParse.eqs2assigns!(Expr[], ["e1" => gparse("0 $rel x - z")[1]], vars, sets)
         @test exprs == [:(x = $(-sent)), :(x = $g(x, 0 + z))]
     end
 end
-
-error("stop")
 
 inputs = Dict("beale.gms"=>rand(2),
               "convex4_10_1.gms"=>rand(10),

@@ -49,7 +49,7 @@ function parsegams(lexed::Vector{AbstractLex})
                     @assert(kw == Keyword("variables"))
                 end
                 sets = get(gams, "sets", nothing)
-                variables = getdefault!(gams, "variables", Dict{Any,VarInfo})
+                variables = getdefault!(gams, "variables", OrderedDict{Any,VarInfo})
                 while i < length(lexed) && !isa(lexed[i+1], StatementEnd) && !isa(lexed[i+1], Keyword)
                     var = lexed[i+=1]
                     var == GText(",") && continue
@@ -335,3 +335,11 @@ function getwithkey(dict, key::AbstractString)
     end
     error(key, " not found")
 end
+
+function getdefault!(gams, tag, ::Type{T}) where T
+    if !haskey(gams, tag)
+        gams[tag] = T<:Associative ? T() : (T<:Vector ? T(uninitialized, 0) : error("type $T not handled"))
+    end
+    return gams[tag]
+end
+getdefault!(gams, tag) = getdefault!(gams, tag, Dict{String,String})

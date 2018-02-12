@@ -94,8 +94,9 @@ Base.convert(::Type{Expr}, l::GArray) =
 Base.convert(::Type{Expr}, l::GCall) =
     Expr(:call, Symbol(getname(l)), map(x->convert(Expr, x), l.args)...)
 function Base.convert(::Type{Expr}, l::Parens)
-    args = map(x->convert(Expr, x), l.indices)
-    return :( ($(args...,)) )
+    @assert length(l.args) == 1
+    ex = convert(Expr, l.args[1])
+    return :( ($ex) )
 end
 
 getname(a::GArray) = a.name

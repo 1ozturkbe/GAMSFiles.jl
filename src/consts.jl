@@ -136,6 +136,7 @@ const funcsubst = Dict(["power"=>"^",
 # Functions used in GAMS expressions
 const gamsfuncs = quote
     sqr(x) = x*x
+    power(x,y) = x^y
     errorf(x) = 0.5 * (1 + erf(x))
     normal(x,y) = y*randn() + x
     uniform(x,y) = (y-x)*rand() + x
