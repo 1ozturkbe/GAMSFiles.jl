@@ -98,6 +98,8 @@ const modelattributes = Set(["bratio",
                              "sysout",
                              "workspace"])
 
+const operatortokens = ("+", "-", "*", "/", "^", "=e=", "=g=", "=l=")
+
 const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
 
 # From table 6.1 in the manual
@@ -137,7 +139,11 @@ const gamsfuncs = quote
     errorf(x) = 0.5 * (1 + erf(x))
     normal(x,y) = y*randn() + x
     uniform(x,y) = (y-x)*rand() + x
+    and(x, y) = x & y
+    or(x, y)  = x | y
 end
+
+@eval module GamsFuncs $gamsfuncs end
 
 # Translations of GAMS functions to Julia functions
 const gamsf2jf = Dict(:sum=>:sum, :smax=>:maximum, :smin=>:minimum)

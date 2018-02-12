@@ -3,7 +3,7 @@ module GAMSParse
 using DataStructures, OffsetArrays
 using Compat
 
-export parsegams
+export parsegams, getwithkey, sexpr
 
 include("types.jl")
 include("consts.jl")
@@ -15,26 +15,29 @@ function parseconsts!(gams::Dict{String,Any})
     sets = get(gams, "sets", nothing)
     if haskey(gams, "parameters")
         params = gams["parameters"]
-        for (k, v) in params
-            isempty(v) && continue
-            if k isa GArray
-                c = allocate(k, sets)
-                lines = strip.(split(v, '\n'))
-                for line in lines
-                    ln = split(line)
-                    @assert(length(ln) == 2)
-                    c[parse(Int, ln[1])] = parse(Float64, ln[2])
+        for (key, val) in params
+            c = allocate(key, sets)
+            if !isempty(val)
+                if key isa GText
+                    c[] = parse(Float64, val)
+                else
+                    lines = strip.(split(val, '\n'))
+                    for line in lines
+                        ln = split(line)
+                        @assert(length(ln) == 2)
+                        c[parse(Int, ln[1])] = parse(Float64, ln[2])
+                    end
                 end
-                params[k] = c
             end
+            params[key] = c
         end
     end
     if haskey(gams, "tables")
         tables = gams["tables"]
-        for (key, v) in tables
+        for (key, val) in tables
             @assert(key isa GArray)
             c = allocate(key, sets)
-            lines = split(v, '\n')
+            lines = split(val, '\n')
             firstrow = true
             cols = Int[]
             for line in lines
@@ -83,6 +86,249 @@ end
 #  - handle assignments (const and expr-generating)
 #  - mash together the objective
 #  - module creation
+
+# Process assignments that can be resolved to a constant
+function parseassignments!(exprs, asgn::Vector{<:Pair}, params::Dict, sets)
+    for (k, v) in asgn
+        x, success = evalconst(v)
+        if success
+            if k isa GArray && all(x->isa(x, GNumber), k.indices)
+                # This can be evaluated ahead of time
+                c = params[getname(k)]
+                inds = map(x->x.val, k.indices)
+                c[inds...] = x
+            elseif k isa GText
+                params[k][] = x
+            else
+                lhs = convert(Expr, k)
+                push!(exprs, assignexpr(lhs, x, sets))
+            end
+        else
+            push!(exprs, assignexpr(convert(Expr, k), convert(Expr, v), sets))
+        end
+    end
+    return exprs
+end
+
+function parseassignments(gams)
+    params = getvars(gams["parameters"])
+    vars   = getvars(gams["variables"])
+    preexprs, bodyexprs = Expr[], Expr[]
+    sets = get(gams, "sets", Dict{String,Any}())
+    if haskey(gams, "assignments")
+        parseassignments!(preexprs, gams["assignments"], params, sets)
+    end
+    parseequations!(bodyexprs, gams["equations"], vars, sets)
+    return preexprs, bodyexprs
+end
+
+function parseequations!(bodyexprs, equations, vars, sets)
+    sentinels = Dict()
+    for (key, eq) in equations
+        parseequation!(bodyexprs, sentinels, eq, vars, sets)
+    end
+    for (key, op) in sentinels
+        op == :(=) && continue
+        val = op == :> -Inf : Inf
+        if key isa GText
+            init = Expr(:(=), Symbol(key.text), val)
+        elseif key isa GArray
+            init = Expr(:call, :fill!, Symbol(key.name), val)
+        else
+            error("unexpected key ", key)
+        end
+        unshift!(bodyexprs, init)
+    end
+    return bodyexprs
+end
+
+function parseequation!(exprs, sentinels, eq, vars, sets)
+    function throwerr(eq)
+        println(STDERR)
+        sexpr(STDERR, eq)
+        println(STDERR)
+        error("equation not of expected form")
+    end
+    if !(eq isa GCall && haskey(eqops, getname(eq)))
+        throwerr(eq)
+    end
+    op = eqops[getname(eq)]
+    # Extract the target of the equation
+    lhs, rhs = eq.args[1], eq.args[2]
+    if haskey(vars, rhs)
+        lhs, rhs, op = rhs, lhs, flipop(op)
+    end
+    if haskey(vars, lhs)
+        # equation is of the form "x =e= expr"
+        push!(exprs, assignexpr(convert(Expr, lhs), convert(Expr, rhs), sets, op))
+        sentinels[lhs] = op
+    else
+        if lhs isa GNumber
+            lhs, rhs, op = rhs, lhs, flipop(op)
+        end
+        if rhs isa GNumber && lhs isa GCall && lhs.name ∈ ("+", "-")
+            # equation is (hopefully) of the form "y ± x =e= const"
+            var, y = lhs.args[1], lhs.args[2]
+            if haskey(vars, var)
+                rhs = Expr(lhs.name == "-" ? :+ : :-, rhs.val, convert(Expr, y))
+                if lhs.name == "-"
+                    op = flipop(op)
+                end
+                push!(exprs, assignexpr(convert(Expr, var), convert(Expr, rhs), sets, op))
+                sentinels[var] = op
+            else
+                var, y = y, var
+                if !haskey(vars, var)
+                    throwerr(eq)
+                end
+                yex, c = convert(Expr, y), rhs.val
+                if lhs.name == "-"
+                    yex, c = c, yex
+                end
+                rhs = Expr(:-, c, yex)
+                push!(exprs, assignexpr(convert(Expr, var), convert(Expr, rhs), sets, op))
+            end
+        end
+    end
+    return exprs
+end
+
+function assignexpr(lhs, rhs, sets, op = :(=))
+    if op == :(=)
+        body = Expr(:(=), lhs, rhs)
+    elseif op == :> || op == :<
+        body = Expr(:(=), lhs, Expr(:call, op == :> ? :max : :min, lhs, rhs))
+    else
+        error("operator $op not recognized")
+    end
+    if lhs.head == :ref
+        for j = length(lhs.args):-1:2
+            s = lhs.args[j]
+            if s isa Symbol
+                rng = sets[string(s)]
+                body = quote
+                    for $s = $rng
+                        $body
+                    end
+                end
+            end
+        end
+    end
+    return body
+end
+
+flipop(op) = op == :(=) ? op : (op == :< ? :> : (op == :> ? :< : error(op, " not recognized")))
+
+# function parseassign(eqex, vars; loop=nothing)
+#     if endswith(eqex, ';')
+#         eqex = eqex[1:end-1]
+#     end
+#     m = match(r"=([eEgGlL])=", eqex)
+#     m === nothing && error("cannot parse ", eqex)
+#     @assert(length(m.captures) == 1)
+#     op = eqops[m.captures[1]]
+#     if op == :(=)
+#         exhead = op
+#         exargs = ()
+#     else
+#         exhead = :call
+#         exargs = (op,)
+#     end
+#     lhs, rhs = strip(eqex[1:m.offset-1]), strip(eqex[m.offset+3:end])
+#     lhssym, rhssym = callsym(lhs), callsym(rhs)
+#     lhs, rhs = replaceexprs(lhs, vars), replaceexprs(rhs, vars)
+#     if rhssym ∈ vars || isnumberstring(lhs)
+#         lhs, rhs = rhs, lhs
+#         lhssym, rhssym = rhssym, lhssym
+#     end
+#     local body
+#     if lhssym ∈ vars
+#         lhsex, rhsex = parse(lhs), parse(rhs)
+#         body = Expr(exhead, exargs..., lhsex, rhsex)
+#         if loop != nothing
+#             while !isempty(loop)
+#                 loopvar, loopr = loop[1]
+#                 body = quote
+#                     for $loopvar = $loopr
+#                         $body
+#                     end
+#                 end
+#                 shift!(loop)
+#             end
+#         end
+#     elseif isnumberstring(rhs)
+#         # Assume the variable-to-be-assigned is last
+#         i = endof(lhs)
+#         while !isspace(lhs[i]) && i > 0
+#             i = prevind(lhs, i)
+#         end
+#         @assert(i>0)
+#         vstr = lhs[nextind(lhs, i):end]
+#         lhssym = varsym(vstr)
+#         @assert(lhssym ∈ vars)
+#         # Find the preceding operator
+#         while i > 0 && ((c = lhs[i]) != '+' && c != '-')
+#             i = prevind(lhs, i)
+#         end
+#         @assert(i>0)
+#         c = lhs[i] == '+' ? -1 : 1
+#         rest = lhs[1:i-1]
+#         restex = parse(rest)
+#         rhsval = numeval(rhs)
+#         body = Expr(exhead, exargs..., parse(vstr), :($c * $restex + $rhsval))
+#         if loop != nothing
+#             while !isempty(loop)
+#                 loopvar, loopr = loop[1]
+#                 body = quote
+#                     for $loopvar = $loopr
+#                         $body
+#                     end
+#                 end
+#                 shift!(loop)
+#             end
+#         end
+#     else
+#         error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
+#     end
+#     return body, lhssym, op
+# end
+
+function allvars(gams)
+    totvars = Dict{String,Any}()
+    if haskey(gams, "variables")
+        getvars!(totvars, gams["variables"])
+    end
+    if haskey(gams, "parameters")
+        getvars!(totvars, gams["parameters"])
+    end
+    if haskey(gams, "tables")
+        getvars!(totvars, gams["tables"])
+    end
+    return totvars
+end
+
+function getvars!(vars, pairiter)
+    for (key, val) in pairiter
+        vars[getname(key)] = val
+    end
+    return vars
+end
+getvars(pairiter) = getvars!(Dict{String,Any}(), pairiter)
+
+function evalconst(expr::AbstractLex)
+    isa(expr, GNumber) && return expr.val, true
+    if isa(expr, GCall)
+        # Apply evalconst to the args of the call
+        arg_sxs = map(evalconst, expr.args)
+        if all(x->x[2], arg_sxs)
+            # we were able to evaluate all the args
+            args = map(x->x[1], arg_sxs)
+            f = getfield(GamsFuncs, Symbol(expr.name))
+            return f(args...), true
+        end
+    end
+    return NaN, false
+end
 
 """
     modex = parsegams(Module, modname, gams)
@@ -204,6 +450,7 @@ end
 # end
 
 allocate(array::GArray, sets) = allocate(array.indices, sets)
+allocate(x::GText, sets) = Ref(0.0)   # a ref so that it can be passed in updatable form
 
 function allocate(setnames, sets)
     axs = getaxes(setnames, sets)
@@ -250,23 +497,23 @@ function callsym(str)
     return nothing
 end
 
-function allvars(gams::Dict)
-    vars = Set{Symbol}()
-    for v in gams["Variables"]
-        push!(vars, GAMSParse.varsym(v))
-    end
-    if haskey(gams, "Table")
-        for (k,v) in gams["Table"]
-            push!(vars, GAMSParse.varsym(k))
-        end
-    end
-    if haskey(gams, "Parameters")
-        for (k,v) in gams["Parameters"]
-            push!(vars, GAMSParse.varsym(k))
-        end
-    end
-    return vars
-end
+# function allvars(gams::Dict)
+#     vars = Set{Symbol}()
+#     for v in gams["Variables"]
+#         push!(vars, GAMSParse.varsym(v))
+#     end
+#     if haskey(gams, "Table")
+#         for (k,v) in gams["Table"]
+#             push!(vars, GAMSParse.varsym(k))
+#         end
+#     end
+#     if haskey(gams, "Parameters")
+#         for (k,v) in gams["Parameters"]
+#             push!(vars, GAMSParse.varsym(k))
+#         end
+#     end
+#     return vars
+# end
 
 function parsesets(gams::Dict)
     sets = Dict{Symbol,UnitRange{Int}}()
@@ -407,79 +654,79 @@ function calls2refs(str::AbstractString, vars)
     return calls2refs!(ex, vars)
 end
 
-function parseassign(eqex, vars; loop=nothing)
-    if endswith(eqex, ';')
-        eqex = eqex[1:end-1]
-    end
-    m = match(r"=([eEgGlL])=", eqex)
-    m === nothing && error("cannot parse ", eqex)
-    @assert(length(m.captures) == 1)
-    op = eqops[m.captures[1]]
-    if op == :(=)
-        exhead = op
-        exargs = ()
-    else
-        exhead = :call
-        exargs = (op,)
-    end
-    lhs, rhs = strip(eqex[1:m.offset-1]), strip(eqex[m.offset+3:end])
-    lhssym, rhssym = callsym(lhs), callsym(rhs)
-    lhs, rhs = replaceexprs(lhs, vars), replaceexprs(rhs, vars)
-    if rhssym ∈ vars || isnumberstring(lhs)
-        lhs, rhs = rhs, lhs
-        lhssym, rhssym = rhssym, lhssym
-    end
-    local body
-    if lhssym ∈ vars
-        lhsex, rhsex = parse(lhs), parse(rhs)
-        body = Expr(exhead, exargs..., lhsex, rhsex)
-        if loop != nothing
-            while !isempty(loop)
-                loopvar, loopr = loop[1]
-                body = quote
-                    for $loopvar = $loopr
-                        $body
-                    end
-                end
-                shift!(loop)
-            end
-        end
-    elseif isnumberstring(rhs)
-        # Assume the variable-to-be-assigned is last
-        i = endof(lhs)
-        while !isspace(lhs[i]) && i > 0
-            i = prevind(lhs, i)
-        end
-        @assert(i>0)
-        vstr = lhs[nextind(lhs, i):end]
-        lhssym = varsym(vstr)
-        @assert(lhssym ∈ vars)
-        # Find the preceding operator
-        while i > 0 && ((c = lhs[i]) != '+' && c != '-')
-            i = prevind(lhs, i)
-        end
-        @assert(i>0)
-        c = lhs[i] == '+' ? -1 : 1
-        rest = lhs[1:i-1]
-        restex = parse(rest)
-        rhsval = numeval(rhs)
-        body = Expr(exhead, exargs..., parse(vstr), :($c * $restex + $rhsval))
-        if loop != nothing
-            while !isempty(loop)
-                loopvar, loopr = loop[1]
-                body = quote
-                    for $loopvar = $loopr
-                        $body
-                    end
-                end
-                shift!(loop)
-            end
-        end
-    else
-        error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
-    end
-    return body, lhssym, op
-end
+# function parseassign(eqex, vars; loop=nothing)
+#     if endswith(eqex, ';')
+#         eqex = eqex[1:end-1]
+#     end
+#     m = match(r"=([eEgGlL])=", eqex)
+#     m === nothing && error("cannot parse ", eqex)
+#     @assert(length(m.captures) == 1)
+#     op = eqops[m.captures[1]]
+#     if op == :(=)
+#         exhead = op
+#         exargs = ()
+#     else
+#         exhead = :call
+#         exargs = (op,)
+#     end
+#     lhs, rhs = strip(eqex[1:m.offset-1]), strip(eqex[m.offset+3:end])
+#     lhssym, rhssym = callsym(lhs), callsym(rhs)
+#     lhs, rhs = replaceexprs(lhs, vars), replaceexprs(rhs, vars)
+#     if rhssym ∈ vars || isnumberstring(lhs)
+#         lhs, rhs = rhs, lhs
+#         lhssym, rhssym = rhssym, lhssym
+#     end
+#     local body
+#     if lhssym ∈ vars
+#         lhsex, rhsex = parse(lhs), parse(rhs)
+#         body = Expr(exhead, exargs..., lhsex, rhsex)
+#         if loop != nothing
+#             while !isempty(loop)
+#                 loopvar, loopr = loop[1]
+#                 body = quote
+#                     for $loopvar = $loopr
+#                         $body
+#                     end
+#                 end
+#                 shift!(loop)
+#             end
+#         end
+#     elseif isnumberstring(rhs)
+#         # Assume the variable-to-be-assigned is last
+#         i = endof(lhs)
+#         while !isspace(lhs[i]) && i > 0
+#             i = prevind(lhs, i)
+#         end
+#         @assert(i>0)
+#         vstr = lhs[nextind(lhs, i):end]
+#         lhssym = varsym(vstr)
+#         @assert(lhssym ∈ vars)
+#         # Find the preceding operator
+#         while i > 0 && ((c = lhs[i]) != '+' && c != '-')
+#             i = prevind(lhs, i)
+#         end
+#         @assert(i>0)
+#         c = lhs[i] == '+' ? -1 : 1
+#         rest = lhs[1:i-1]
+#         restex = parse(rest)
+#         rhsval = numeval(rhs)
+#         body = Expr(exhead, exargs..., parse(vstr), :($c * $restex + $rhsval))
+#         if loop != nothing
+#             while !isempty(loop)
+#                 loopvar, loopr = loop[1]
+#                 body = quote
+#                     for $loopvar = $loopr
+#                         $body
+#                     end
+#                 end
+#                 shift!(loop)
+#             end
+#         end
+#     else
+#         error("neither the lhs $lhs nor rhs $rhs appeared in $vars")
+#     end
+#     return body, lhssym, op
+# end
 
 function replaceexprs(str, vars)
     ex, _ = parse(str, 1)
@@ -530,7 +777,7 @@ replaceexprs!(ex) = ex
 
 function getdefault!(gams, tag, ::Type{T}) where T
     if !haskey(gams, tag)
-        gams[tag] = T<:Dict ? T() : (T<:Vector ? T(uninitialized, 0) : error("type $T not handled"))
+        gams[tag] = T<:Associative ? T() : (T<:Vector ? T(uninitialized, 0) : error("type $T not handled"))
     end
     return gams[tag]
 end

@@ -9,6 +9,14 @@ struct GText <: AbstractLex
     text::String
 end
 
+struct Slashed <: AbstractLex
+    text::String
+end
+
+struct GNumber{T<:Union{Int,Float64}} <: AbstractLex
+    val::T
+end
+
 struct GArray{N} <: AbstractLex
     name::String
     indices::NTuple{N,Any}
@@ -21,25 +29,19 @@ struct Table{N} <: AbstractLex
     body::String
 end
 
-struct Slashed <: AbstractLex
-    text::String
-end
-
-struct GNumber{T<:Union{Int,Float64}} <: AbstractLex
-    val::T
-end
-
 struct Dots <: AbstractLex
     text::String
 end
 
+# perhaps Operator, Relation?
+
 struct GCall <: AbstractLex
     name::String
-    args::Tuple{Vararg{Any}}
+    args::Vector{Any}
 end
 
 struct Parens <: AbstractLex
-    args::Tuple{Vararg{Any}}
+    args::Vector{Any}
 end
 
 struct StatementEnd <: AbstractLex end
@@ -84,6 +86,40 @@ function Base.string(part::GArray)
     str *= ')'
     return str
 end
+
+Base.convert(::Type{Expr}, l::GNumber) = l.val
+Base.convert(::Type{Expr}, l::GText) = Symbol(string(l))
+Base.convert(::Type{Expr}, l::GArray) =
+    Expr(:ref, Symbol(getname(l)), map(x->convert(Expr, x), l.indices)...)
+Base.convert(::Type{Expr}, l::GCall) =
+    Expr(:call, Symbol(getname(l)), map(x->convert(Expr, x), l.args)...)
+function Base.convert(::Type{Expr}, l::Parens)
+    args = map(x->convert(Expr, x), l.indices)
+    return :( ($(args...,)) )
+end
+
+getname(a::GArray) = a.name
+getname(a::Table) = a.name
+getname(a::GCall) = a.name
+getname(a::AbstractLex) = a.text
+
+sexpr(io::IO, l::Union{Keyword,Slashed,Table,Dots}) = print(io, l)
+sexpr(io::IO, l::GText)   = print(io, l.text)
+sexpr(io::IO, l::GNumber) = print(io, l.val)
+sexpr(io::IO, l::GArray)  = print_delim(io, l.name, l.indices, '[', ']')
+sexpr(io::IO, l::GCall)   = print_delim(io, l.name, l.args, '(', ')')
+sexpr(io::IO, l::Parens)  = print_delim(io, "", l.args, '(', ')')
+sexpr(io::IO, l::StatementEnd) = print(io, ';')
+function print_delim(io, name, args, opener, closer)
+    print(io, name, opener)
+    sexpr(io, args[1])
+    for i = 2:length(args)
+        print(io, ',')
+        sexpr(io, args[i])
+    end
+    print(io, closer)
+end
+
 
 ## Parser types
 

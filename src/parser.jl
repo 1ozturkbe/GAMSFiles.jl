@@ -52,6 +52,7 @@ function parsegams(lexed::Vector{AbstractLex})
                 variables = getdefault!(gams, "variables", Dict{Any,VarInfo})
                 while i < length(lexed) && !isa(lexed[i+1], StatementEnd) && !isa(lexed[i+1], Keyword)
                     var = lexed[i+=1]
+                    var == GText(",") && continue
                     @assert(var isa GText || var isa GArray)
                     push!(variables, varinfo(var, attr, sets))
                 end
@@ -83,11 +84,11 @@ function parsegams(lexed::Vector{AbstractLex})
                 modelname = lexed[i+=1]
                 gams[newkw.text] = modelname.text
             elseif kwname == "equations"
-                eqs = getdefault!(gams, kwname, Dict{Any,Any})
+                eqs = getdefault!(gams, kwname, OrderedDict{Any,Any})
                 while i < length(lexed) && !isa(lexed[i+1], StatementEnd) && !isa(lexed[i+1], Keyword)
                     eq = lexed[i+=1]
                     @assert(eq isa GText || eq isa GArray)
-                    push!(eqs, eq=>"")
+                    # push!(eqs, eq=>"")  # add later so the ordering respects the definition order, not decl order
                 end
             elseif kwname == "files"
                 filename = lexed[i+=1]
@@ -110,21 +111,22 @@ function parsegams(lexed::Vector{AbstractLex})
         else
             @assert(stmt isa GText || stmt isa GArray)
             if length(lexed) < i+1
+                # some files seem to have junk after the last semicolon
                 println("skipping trailing ", stmt)
-                return gams  # some files seem to have junk after the last semicolon
+                break
             end
             if lexed[i+1] == Dots("..")
                 # an equation definition
-                eqs = getdefault!(gams, "equations", Dict{Any,Any})
+                eqs = gams["equations"]
                 iend = seek_to_end(lexed, i+=2)
-                eqs[stmt] = lexed[i:iend]
+                eqs[stmt] = parseexprs1(lexed[i:iend])
                 i = iend
             elseif lexed[i+1] == Dots(".")
                 # a variable or model attribute
                 @assert(lexed[i+3] == GText("="))
                 attr = lexed[i+=2]
                 iend = seek_to_end(lexed, i+=2)
-                rhs = lexed[i:iend]
+                rhs = parseexprs1(lexed[i:iend])
                 if attr isa GText && string(attr) ∈ modelattributes
                     m = gams["models"][string(stmt)]
                     m.assignments[string(attr)] = rhs
@@ -133,17 +135,18 @@ function parsegams(lexed::Vector{AbstractLex})
                     varkey = isa(attr, GText) ? stmt : GArray(string(stmt), attr.indices)
                     if attrstr ∈ varattributes
                         v = gams["variables"][varkey]  # gams["variables"][stmt] ?
-                        push!(v.assignments, attr=>lexed[i:iend])
+                        push!(v.assignments, attr=>rhs)
                     else
                         error(attr, " not a recognized attribute")
                     end
                 end
                 i = iend
             else
+                # general assignment (to, e.g., a parameter)
                 @assert lexed[i+1] == GText("=")
-                iend = seek_to_end(lexed, i+=1)
+                iend = seek_to_end(lexed, i+=2)
                 assign = getdefault!(gams, "assignments", Vector{Pair{Any,Any}})
-                push!(assign, stmt=>lexed[i:iend])
+                push!(assign, stmt=>parseexprs1(lexed[i:iend]))
                 i = iend
             end
         end
@@ -189,6 +192,126 @@ function parse_slashed!(dest, lexed, i; parseitems::Bool=true)
     return i
 end
 
+function parseexprs(lexed)
+    # Step 1: split at commas
+    args = []
+    thisarg = []
+    for i = 1:length(lexed)
+        tok = lexed[i]
+        if tok == GText(",")
+            @assert(!isempty(thisarg))
+            push!(args, copy(thisarg))
+            empty!(thisarg)
+        else
+            push!(thisarg, tok)
+        end
+    end
+    if !isempty(thisarg)
+        push!(args, copy(thisarg))
+        empty!(thisarg)
+    end
+    # Step 2: parse each arg
+    n = length(args)
+    parsed = Vector{AbstractLex}(uninitialized, n)
+    todelete = Int[]
+    for j = 1:n
+        thisarg = args[j]
+        # Step 2a: recurse into calls and parse their args
+        for i = 1:length(thisarg)
+            tok = thisarg[i]
+            if tok isa GCall
+                callargs = parseexprs(tok.args)
+                thisarg[i] = GCall(tok.name, callargs)
+            elseif tok isa Parens
+                pargs = parseexprs(tok.args)
+                thisarg[i] = Parens(pargs)
+            end
+        end
+        # Step 2b: process ^ (highest-precedence operator)
+        process_ops!(thisarg, ("^",))
+        # Step 2c: process * and / (next-highest)
+        process_ops!(thisarg, ("*", "/"))
+        # Step 2d: process + and -
+        process_ops!(thisarg, ("+", "-"))
+        # Step 2e: process "and" and "or"
+        process_ops!(thisarg, ("and", "or"))
+        # Step 2f: process relations
+        process_ops!(thisarg, ("=e=", "=g=", "=l="))
+        if length(thisarg) != 1
+            println(STDERR, "thisarg:")
+            foreach(x->(print(STDERR, "  "); sexpr(STDERR, x); println(STDERR)), thisarg)
+        end
+        @assert(length(thisarg) == 1)
+        parsed[j] = stripnewcall!(thisarg[1])
+    end
+    return parsed
+end
+
+function parseexprs1(lexed)
+    parsed = parseexprs(lexed)
+    @assert(length(parsed) == 1)
+    return parsed[1]
+end
+
+# A "temporary type" for marking calls that arose from operator-precedence resolution
+# Future lower-priority operators will need to recurse into any NewCalls
+struct NewCall <: AbstractLex
+    call
+end
+
+function process_ops!(tokens::Vector, ops)
+    i = length(tokens)
+    while i > 0
+        tok = tokens[i]
+        if tok isa NewCall
+            newtok = tok.call
+            for arg in newtok.args
+                process_ops!(arg, ops)
+            end
+        end
+        if !isa(tok, GText) || tok.text ∉ ops
+            i -= 1
+            continue
+        end
+        if i > 1
+            tokens[i-1] = NewCall(GCall(tok.text, [tokens[i-1], tokens[i+1]]))
+            deleteat!(tokens, (i,i+1))
+        else
+            # unary + or -
+            @assert(tok.text ∈ ("+", "-"))
+            if tok.text == "+"
+                tokens[1] = tokens[2]
+            else
+                nexttok = tokens[2]
+                if nexttok isa GNumber
+                    tokens[1] = GNumber(-nexttok.val)
+                else
+                    tokens[1] = NewCall(GCall("-", [nexttok]))
+                end
+            end
+            deleteat!(tokens, (2,))
+        end
+        i -= 1
+    end
+    return tokens
+end
+process_ops!(tokens, ops) = nothing
+
+function sexpr(io::IO, l::NewCall)
+    print(io, "NewCall(")
+    sexpr(io, l.call)
+    print(io, ")")
+end
+
+function stripnewcall!(expr::NewCall)
+    call = expr.call
+    for i = 1:length(call.args)
+        call.args[i] = stripnewcall!(call.args[i])
+    end
+    return call
+end
+stripnewcall!(expr) = expr
+
 function varinfo(name::GText, attr, sets)
     return name=>VarInfo(attr, ())
 end
@@ -202,4 +325,13 @@ function seek_to_end(lexed, i)
         iend += 1
     end
     return iend
+end
+
+function getwithkey(dict, key::AbstractString)
+    for (k, v) in dict
+        if getname(k) == key
+            return v
+        end
+    end
+    error(key, " not found")
 end

@@ -16,7 +16,7 @@ function lex(io::IO)
 end
 
 function lex!(io, buf, lexed, pos, cterminate = '\0')
-    inrelation = innumber = false
+    inrelation = innumber = hadexponent = false
     while !eof(io)
         c = read(io, Char)
         if pos == 1 && (c == '*' || c == '$')
@@ -37,9 +37,15 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
             if position(buf) == 0
                 innumber = true
             end
-        elseif innumber && c ∈ ('.', 'e', 'E', '+', '-')
+        elseif innumber && c == '.'
+        elseif innumber && c ∈ ('e', 'E')
+            hadexponent = true
+        elseif innumber && c ∈ ('+', '-')
+            if !hadexponent
+                innumber = false
+            end
         else
-            innumber = false
+            innumber = hadexponent = false
         end
         if c == '/'
             # We have to distinguish division from "set" notation, so look backward for
@@ -68,9 +74,9 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
                 args = AbstractLex[]
                 pos = lex!(io, buf, args, pos, closerdict[c])
                 if c == '(' && prelc ∈ funcnames
-                    push!(lexed, GCall(prelc, (args...,)))
+                    push!(lexed, GCall(prelc, args))
                 elseif isempty(pre)
-                    push!(lexed, Parens((args...,)))
+                    push!(lexed, Parens(args))
                 else
                     push!(lexed, GArray(pre, (args...,)))
                 end
@@ -95,6 +101,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
             push!(lexed, StatementEnd())
         elseif c == ','
             tag!(lexed, String(take!(buf)))
+            push!(lexed, GText(","))
         elseif innumber && c ∈ ('+', '-', '.')
             write(buf, c)
         elseif c ∈ ('+', '-', '*', '/', '^', '=', '.')
@@ -102,7 +109,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
             if inrelation
                 write(buf, c)
                 if c == '='
-                    tag!(lexed, String(take!(buf)))
+                    tag!(lexed, lowercase(String(take!(buf))))
                 end
                 inrelation = false
                 continue
