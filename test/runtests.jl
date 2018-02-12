@@ -259,22 +259,24 @@ end
     exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("y =l= x")[1]], vars, sets)
     @test exprs == [:(y = $Inf), :(y = min(y, x))]
 
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x + z =g= 0")[1]], vars, sets)
-    @test exprs == [:(x = $(-Inf)), :(x = max(x, 0 - z))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z + x =g= 0")[1]], vars, sets)
-    @test exprs == [:(x = $(-Inf)), :(x = max(x, 0 - z))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =g= z + x")[1]], vars, sets)
-    @test exprs == [:(x = $Inf), :(x = min(x, 0 - z))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =g= x + z")[1]], vars, sets)
-    @test exprs == [:(x = $Inf), :(x = min(x, 0 - z))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x - z =g= 0")[1]], vars, sets)
-    @test exprs == [:(x = $(-Inf)), :(x = max(x, 0 + z))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z - x =g= 0")[1]], vars, sets)
-    @test exprs == [:(x = $Inf), :(x = min(x, z - 0))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =g= z - x")[1]], vars, sets)
-    @test exprs == [:(x = $(-Inf)), :(x = max(x, z - 0))]
-    exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 =g= x - z")[1]], vars, sets)
-    @test exprs == [:(x = $Inf), :(x = min(x, 0 + z))]
+    for (rel, f, g, sent) in (("=g=", :max, :min, -Inf), ("=l=", :min, :max, Inf))
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x + z $rel 0")[1]], vars, sets)
+        @test exprs == [:(x = $sent), :(x = $f(x, 0 - z))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z + x $rel 0")[1]], vars, sets)
+        @test exprs == [:(x = $sent), :(x = $f(x, 0 - z))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel z + x")[1]], vars, sets)
+        @test exprs == [:(x = $(-sent)), :(x = $g(x, 0 - z))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel x + z")[1]], vars, sets)
+        @test exprs == [:(x = $(-sent)), :(x = $g(x, 0 - z))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("x - z $rel 0")[1]], vars, sets)
+        @test exprs == [:(x = $sent), :(x = $f(x, 0 + z))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("z - x $rel 0")[1]], vars, sets)
+        @test exprs == [:(x = $(-sent)), :(x = $g(x, z - 0))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel z - x")[1]], vars, sets)
+        @test exprs == [:(x = $sent), :(x = $f(x, z - 0))]
+        exprs = GAMSParse.parseequations!(Expr[], ["e1" => gparse("0 $rel x - z")[1]], vars, sets)
+        @test exprs == [:(x = $(-sent)), :(x = $g(x, 0 + z))]
+    end
 end
 
 error("stop")
