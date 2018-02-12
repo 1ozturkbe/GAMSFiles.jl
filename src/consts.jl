@@ -100,7 +100,7 @@ const modelattributes = Set(["bratio",
 
 const operatortokens = ("+", "-", "*", "/", "^", "=e=", "=g=", "=l=")
 
-const eqops = Dict("e" => :(=), "E" => :(=), "g" => :>, "G" => :>, "l" => :<, "L" => :<)
+const eqops = Dict("=e=" => :(=), "=g=" => :>, "=l=" => :<)
 
 # From table 6.1 in the manual
 const funcnames = Set(["errorf",

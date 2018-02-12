@@ -94,7 +94,7 @@ function parseassignments!(exprs, asgn::Vector{<:Pair}, params::Dict, sets)
         if success
             if k isa GArray && all(x->isa(x, GNumber), k.indices)
                 # This can be evaluated ahead of time
-                c = params[getname(k)]
+                c = params[k]
                 inds = map(x->x.val, k.indices)
                 c[inds...] = x
             elseif k isa GText
@@ -129,7 +129,7 @@ function parseequations!(bodyexprs, equations, vars, sets)
     end
     for (key, op) in sentinels
         op == :(=) && continue
-        val = op == :> -Inf : Inf
+        val = op == :> ? -Inf : Inf
         if key isa GText
             init = Expr(:(=), Symbol(key.text), val)
         elseif key isa GArray
@@ -154,11 +154,14 @@ function parseequation!(exprs, sentinels, eq, vars, sets)
     end
     op = eqops[getname(eq)]
     # Extract the target of the equation
+    # One point of ugliness is that relations like "x =e= y" where both x and
+    # y are variables cannot be uniquely handled by assignment. In such cases
+    # just preserve the order.
     lhs, rhs = eq.args[1], eq.args[2]
-    if haskey(vars, rhs)
+    if !(lhs isa Union{GText,GArray} && haskey(vars, getname(lhs)))
         lhs, rhs, op = rhs, lhs, flipop(op)
     end
-    if haskey(vars, lhs)
+    if lhs isa Union{GText,GArray} && haskey(vars, getname(lhs))
         # equation is of the form "x =e= expr"
         push!(exprs, assignexpr(convert(Expr, lhs), convert(Expr, rhs), sets, op))
         sentinels[lhs] = op
@@ -169,24 +172,22 @@ function parseequation!(exprs, sentinels, eq, vars, sets)
         if rhs isa GNumber && lhs isa GCall && lhs.name ∈ ("+", "-")
             # equation is (hopefully) of the form "y ± x =e= const"
             var, y = lhs.args[1], lhs.args[2]
-            if haskey(vars, var)
-                rhs = Expr(lhs.name == "-" ? :+ : :-, rhs.val, convert(Expr, y))
-                if lhs.name == "-"
-                    op = flipop(op)
-                end
-                push!(exprs, assignexpr(convert(Expr, var), convert(Expr, rhs), sets, op))
+            if var isa Union{GText,GArray} && haskey(vars, getname(var))
+                rhs = Expr(:call, lhs.name == "-" ? :+ : :-, rhs.val, convert(Expr, y))
                 sentinels[var] = op
+                push!(exprs, assignexpr(convert(Expr, var), convert(Expr, rhs), sets, op))
             else
                 var, y = y, var
-                if !haskey(vars, var)
+                if !(var isa Union{GText,GArray} && haskey(vars, getname(var)))
                     throwerr(eq)
                 end
                 yex, c = convert(Expr, y), rhs.val
                 if lhs.name == "-"
-                    yex, c = c, yex
+                    yex, c, op = c, yex, flipop(op)
                 end
-                rhs = Expr(:-, c, yex)
+                rhs = Expr(:call, :-, c, yex)
                 push!(exprs, assignexpr(convert(Expr, var), convert(Expr, rhs), sets, op))
+                sentinels[var] = op
             end
         end
     end
@@ -201,8 +202,8 @@ function assignexpr(lhs, rhs, sets, op = :(=))
     else
         error("operator $op not recognized")
     end
-    if lhs.head == :ref
-        for j = length(lhs.args):-1:2
+    if lhs isa Expr && lhs.head == :ref
+        for j = 2:length(lhs.args)
             s = lhs.args[j]
             if s isa Symbol
                 rng = sets[string(s)]

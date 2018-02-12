@@ -78,7 +78,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
                 elseif isempty(pre)
                     push!(lexed, Parens(args))
                 else
-                    push!(lexed, GArray(pre, (args...,)))
+                    push!(lexed, GArray(pre, (filter(x->x!=GText(","), args)...,)))
                 end
             else
                 write(buf, c)
