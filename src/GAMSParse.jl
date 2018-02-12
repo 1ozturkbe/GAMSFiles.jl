@@ -326,6 +326,10 @@ function evalconst(expr::AbstractLex)
             f = getfield(GamsFuncs, Symbol(expr.name))
             return f(args...), true
         end
+    elseif isa(expr, Parens)
+        if length(expr.args) == 1
+            return evalconst(expr.args[1])
+        end
     end
     return NaN, false
 end

@@ -121,6 +121,17 @@ gparse(str) = GAMSParse.parseexprs(GAMSParse.lex(seekstart(IOBuffer(str))))
     @test length(parsed.args) == 2
     @test parsed.args[1] == GAMSParse.GNumber(1)
     @test parsed.args[2] == GAMSParse.GCall("*", [GAMSParse.GNumber(2), GAMSParse.GArray("t", (GAMSParse.GText("j"),))])
+
+    parsed = gparse("abs(2*t(j)-1)")
+    @test length(parsed) == 1
+    parsed = parsed[1]
+    @test parsed isa GAMSParse.GCall && parsed.name == "abs"
+    @test length(parsed.args) == 1
+    parsed = parsed.args[1]
+    @test parsed isa GAMSParse.GCall && parsed.name == "-"
+    @test length(parsed.args) == 2
+    @test parsed.args[1] == GAMSParse.GCall("*", [GAMSParse.GNumber(2), GAMSParse.GArray("t", (GAMSParse.GText("j"),))])
+    @test parsed.args[2] == GAMSParse.GNumber(1)
 end
 
 @testset "evalconst" begin
@@ -132,11 +143,19 @@ end
     ex = gparse("sin($pi2)")
     x, success = GAMSParse.evalconst(ex[1])
     @test x ≈ 1 && success
+    z = Float64(pi)
+    ex = gparse("sin($z/2)")
+    x, success = GAMSParse.evalconst(ex[1])
+    @test x ≈ 1 && success
     ex = gparse("sin(pi/2)")
     x, success = GAMSParse.evalconst(ex[1])
     @test isnan(x) && !success
     ex = gparse("2**4")
     @test GAMSParse.evalconst(ex[1]) == (16, true)
+    ex = gparse("1+2^3*7-5")
+    @test GAMSParse.evalconst(ex[1]) == (52, true)
+    ex = gparse("1+2^(5-2)*7-5")
+    @test GAMSParse.evalconst(ex[1]) == (52, true)
 end
 
 @testset "parseconsts" begin
