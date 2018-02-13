@@ -1,4 +1,4 @@
-module GAMSParse
+module GAMSFiles
 
 using DataStructures, OffsetArrays
 using Compat

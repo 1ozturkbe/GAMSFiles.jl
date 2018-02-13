@@ -1,8 +1,8 @@
-# GAMSParse
+# GAMSFiles
 
-[![Build Status](https://travis-ci.org/timholy/GAMSParse.jl.svg?branch=master)](https://travis-ci.org/timholy/GAMSParse.jl)
+[![Build Status](https://travis-ci.org/timholy/GAMSFiles.jl.svg?branch=master)](https://travis-ci.org/timholy/GAMSFiles.jl)
 
-[![codecov.io](http://codecov.io/github/timholy/GAMSParse.jl/coverage.svg?branch=master)](http://codecov.io/github/timholy/GAMSParse.jl?branch=master)
+[![codecov.io](http://codecov.io/github/timholy/GAMSFiles.jl/coverage.svg?branch=master)](http://codecov.io/github/timholy/GAMSFiles.jl?branch=master)
 
 Parse files for [General Algebraic Modeling System](https://www.gams.com/) and return
 Julia expressions.
