@@ -1,7 +1,6 @@
 module GAMSFiles
 
 using DataStructures, OffsetArrays
-using Compat
 
 export parsegams, getwithkey, sexpr
 
@@ -48,7 +47,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
         end
     end
     # As needed, destructure the input vector
-    varnames = Vector{Symbol}(uninitialized, length(uvars))
+    varnames = Vector{Symbol}(undef, length(uvars))
     if length(uvars) == 1 && (v = uvars[1]) isa GArray
         varnames[1] = getname(v)
         xin = Symbol(getname(v))
@@ -62,7 +61,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
         xaxes = (Base.OneTo(length(varnames)),)
         unshift!(bodyexprs, Expr(:(=), Expr(:tuple, varnames...), xin))
     end
-    szcheck = :(@assert(Compat.axes($xin) == $xaxes))
+    szcheck = :(@assert(axes($xin) == $xaxes))
     body = Expr(:block, szcheck, bodyexprs...)
     # Set up the constant expressions
     initexprs = Expr[]
@@ -77,7 +76,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     append!(initexprs, preexprs)
     modex = quote
         module $modname
-        using Compat, OffsetArrays
+        using OffsetArrays
         $gamsfuncs
         $(Expr(:block, initexprs...))
         function objective($xin)
@@ -334,7 +333,7 @@ function deletefrom!(a::Vector, pr::Pair)
     end
     a
 end
-deletefrom!(a::Associative, pr::Pair) = delete!(a, first(pr))
+deletefrom!(a::AbstractDict, pr::Pair) = delete!(a, first(pr))
 
 function solvefor(eq, solvevar)
     @assert((eq isa GCall) & haskey(eqops, getname(eq)))
@@ -411,7 +410,7 @@ function isinitialized(vinfo)
     end
     return false
 end
-isinitialized(::Void) = false
+isinitialized(::Nothing) = false
 
 function assignexpr(lhs, rhs, sets::Dict, op = :(=))
     if op == :(=)
@@ -531,21 +530,21 @@ function allocate(setnames, sets)
     axs = getaxes(setnames, sets)
     axs isa Tuple{} && return 0.0
     axs isa Tuple{Base.OneTo{Int},Vararg{Base.OneTo{Int}}} &&
-        return Array{Float64}(uninitialized, length.(axs))
-    return OffsetArray{Float64}(uninitialized, axs)
+        return Array{Float64}(undef, length.(axs))
+    return OffsetArray{Float64}(undef, axs)
 end
 
 function allocate_expr(setnames, sets)
     axs = getaxes(setnames, sets)
     axs isa Tuple{} && return 0.0
     axs isa Tuple{Base.OneTo{Int},Vararg{Base.OneTo{Int}}} &&
-        return :(Array{Float64}(uninitialized, $(length.(axs))))
-    return :(OffsetArray{Float64}(uninitialized, $axs))
+        return :(Array{Float64}(undef, $(length.(axs))))
+    return :(OffsetArray{Float64}(undef, $axs))
 end
 
 
 function splitws(str; rmsemicolon::Bool=false)
-    iend = endof(str)
+    iend = lastindex(str)
     if rmsemicolon && str[iend] == ';'
         iend = prevind(str, iend)
     end

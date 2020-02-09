@@ -1,8 +1,7 @@
 module GAMSTest
 
 using GAMSFiles
-using Compat
-using Base.Test
+using Test
 
 glex(str) = GAMSFiles.lex(seekstart(IOBuffer(str)))
 
@@ -220,9 +219,9 @@ end
                   pvecj  => GAMSFiles.allocate(pvecj, sets),
                   pmat   => GAMSFiles.allocate(pmat, sets))
     @test params[pconst] isa Base.RefValue
-    @test Compat.axes(params[pveci]) === (sets["i"],)
-    @test Compat.axes(params[pvecj]) === (sets["j"],)
-    @test Compat.axes(params[pmat])  === (UnitRange(sets["i"]),sets["j"])
+    @test axes(params[pveci]) === (sets["i"],)
+    @test axes(params[pvecj]) === (sets["j"],)
+    @test axes(params[pmat])  === (UnitRange(sets["i"]),sets["j"])
     noeval = gparse("cos(alpha)")[1]  # an expression that can't be reduced to a constant
     exprs = GAMSFiles.parseassignments!(Expr[], [pconst=>GAMSFiles.GNumber(3)], params, sets)
     @test params[pconst][] == 3 && isempty(exprs)
@@ -395,7 +394,7 @@ cd(joinpath(@__DIR__, "gams")) do
         mod = eval(modex)
         f = getfield(mod, :objective)
         x = inputs[file]
-        @assert(Compat.axes(x) == Compat.axes(axs[1]))
+        @assert(axes(x) == axes(axs[1]))
         @test isreal(Base.invokelatest(f, x))
     end
 end

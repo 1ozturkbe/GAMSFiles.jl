@@ -226,7 +226,7 @@ function parseexprs(lexed, debug=false)
     end
     # Step 2: parse each arg
     n = length(args)
-    parsed = Vector{AbstractLex}(uninitialized, n)
+    parsed = Vector{AbstractLex}(undef, n)
     todelete = Int[]
     for j = 1:n
         thisarg = args[j]
@@ -262,8 +262,8 @@ function parseexprs(lexed, debug=false)
         debug && sexprlf.(thisarg)
         process_ops!(thisarg, ("=e=", "=g=", "=l="), debug)
         if length(thisarg) != 1
-            println(STDERR, "thisarg:")
-            foreach(x->(print(STDERR, "  "); sexpr(STDERR, x); println(STDERR)), thisarg)
+            println(stderr, "thisarg:")
+            foreach(x->(print(stderr, "  "); sexpr(stderr, x); println(stderr)), thisarg)
         end
         @assert(length(thisarg) == 1)
         parsed[j] = stripnewcall!(thisarg[1])
@@ -383,7 +383,7 @@ end
 
 function getdefault!(gams, tag, ::Type{T}) where T
     if !haskey(gams, tag)
-        gams[tag] = T<:Associative ? T() : (T<:Vector ? T(uninitialized, 0) : error("type $T not handled"))
+        gams[tag] = T<:AbstractDict ? T() : (T<:Vector ? T(undef, 0) : error("type $T not handled"))
     end
     return gams[tag]
 end
