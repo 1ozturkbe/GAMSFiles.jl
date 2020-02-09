@@ -4,7 +4,7 @@ const closerdict = Dict('"'=>'"',
                         '('=>')',
                         '['=>']',
                         '{'=>'}')
-const closers = (collect(values(closerdict))...)
+const closers = (collect(values(closerdict))...,)
 closerdict['/'] = '/'  # / is a weird delimiter since it also means division
 
 function lex(io::IO)
@@ -56,7 +56,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
         if c == '/'
             # We have to distinguish division from "set" notation, so look backward for
             # a keyword
-            i = endof(lexed)
+            i = lastindex(lexed)
             while i > 0
                 lexi = lexed[i]
                 if lexi isa StatementEnd
@@ -122,7 +122,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
                 inrelation = false
                 continue
             end
-            if c == '=' && peekchar(io) ∈ ('e', 'E', 'g', 'G', 'l', 'L')
+            if c == '=' && peek(io) ∈ ('e', 'E', 'g', 'G', 'l', 'L')
                 tag!(lexed, String(take!(buf)))
                 write(buf, c)
                 inrelation = true
@@ -131,7 +131,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
             tag!(lexed, String(take!(buf)))
             if c ∈ ('*', '.') && !eof(io)
                 # Translate "x**y" into "x^y"
-                c2 = peekchar(io)
+                c2 = peek(io)
                 if c2 == c == '*'
                     read(io, Char)
                     push!(lexed, GText("^"))
