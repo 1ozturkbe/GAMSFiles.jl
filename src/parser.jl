@@ -206,7 +206,7 @@ function parse_slashed!(dest, lexed, i; parseitems::Bool=true)
     return i
 end
 
-function parseexprs(lexed, debug=false)
+function parseexprs(lexed, debug=true)
     # Step 1: split at commas
     args = []
     thisarg = []
