@@ -206,7 +206,7 @@ function parse_slashed!(dest, lexed, i; parseitems::Bool=true)
     return i
 end
 
-function parseexprs(lexed, debug=true)
+function parseexprs(lexed, debug=false)
     # Step 1: split at commas
     args = []
     thisarg = []
@@ -265,7 +265,7 @@ function parseexprs(lexed, debug=true)
             println(stderr, "thisarg:")
             foreach(x->(print(stderr, "  "); sexpr(stderr, x); println(stderr)), thisarg)
         end
-        @assert(length(thisarg) == 1)
+#         @assert(length(thisarg) == 1)
         parsed[j] = stripnewcall!(thisarg[1])
     end
     return parsed

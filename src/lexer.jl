@@ -158,6 +158,15 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
     if position(buf) > 0
         tag!(lexed, String(take!(buf)))
     end
+    # Fixing double Dots(".") issue
+    i = 1;
+    while i < length(lexed)
+        if lexed[i] == lexed[i+1] == Dots(".")
+            splice!(lexed, i)
+            lexed[i] = Dots("..")
+        else i +=1;
+        end
+    end
     return pos
 end
 
@@ -252,15 +261,6 @@ function lex_table!(buf, io, lexed, pos)
     end
     body, term = readupto(io, ';')
     push!(lexed, Table(array, body))
-    i = 1;
-    # Fixing double Dots(".") issue
-    while i <= length(lexed)
-        if lexed[i] == lexed[i+1] == Dots(".")
-            splice!(lexed, i)
-            lexed[i] = Dots("..")
-        else i +=1;
-        end
-    end
     return pos
 end
 
