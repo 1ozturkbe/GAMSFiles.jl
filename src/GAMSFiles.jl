@@ -40,7 +40,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
             if v isa GArray && getname(v) != gams["minimizing"]
                 vsym = Symbol(getname(v))
                 allocex = allocate_expr(v.indices, gams["sets"])
-                unshift!(bodyexprs, :($vsym = $allocex))
+                pushfirst!(bodyexprs, :($vsym = $allocex))
             end
         else
             push!(uvars, v)
@@ -59,7 +59,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
         end
         xin = gensym("x")
         xaxes = (Base.OneTo(length(varnames)),)
-        unshift!(bodyexprs, Expr(:(=), Expr(:tuple, varnames...), xin))
+        pushfirst!(bodyexprs, Expr(:(=), Expr(:tuple, varnames...), xin))
     end
     szcheck = :(@assert(axes($xin) == $xaxes))
     body = Expr(:block, szcheck, bodyexprs...)
@@ -316,7 +316,7 @@ function eqs2assigns!(bodyexprs, equations, vars, sets, solvevar)
         else
             error("unexpected key ", key)
         end
-        unshift!(bodyexprs, init)
+        pushfirst!(bodyexprs, init)
     end
     return solved
 end
