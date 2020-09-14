@@ -105,7 +105,7 @@ getname(a::GCall) = a.name
 getname(a::GNumber) = nothing
 getname(a::AbstractLex) = a.text
 
-sexpr(l::AbstractLex) = sexpr(STDOUT, l)
+sexpr(l::AbstractLex) = sexpr(stdout, l)
 sexprlf(l::AbstractLex) = (sexpr(l); println())
 sexpr(io::IO, l::Union{Keyword,Slashed,Table,Dots}) = print(io, l)
 sexpr(io::IO, l::GText)   = print(io, l.text)

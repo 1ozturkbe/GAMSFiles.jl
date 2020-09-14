@@ -131,7 +131,7 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
             tag!(lexed, String(take!(buf)))
             if c ∈ ('*', '.') && !eof(io)
                 # Translate "x**y" into "x^y"
-                c2 = peek(io)
+                c2 = Char(peek(io))
                 if c2 == c == '*'
                     read(io, Char)
                     push!(lexed, GText("^"))
@@ -157,6 +157,19 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
     end
     if position(buf) > 0
         tag!(lexed, String(take!(buf)))
+    end
+    # NOTE THIS HACK: Fixing double Dots(".") and relations issues
+    i = 1;
+    eq = GText("=")
+    while i < length(lexed)
+        if lexed[i] == lexed[i+1] == Dots(".")
+            splice!(lexed, i)
+            lexed[i] = Dots("..")
+        elseif i < length(lexed)-2 && lexed[i] == lexed[i+2] == eq
+            lexed[i] = GText(string("=", lowercase(lexed[i+1].text), "="))
+            splice!(lexed, [i+1, i+2])
+        else i +=1;
+        end
     end
     return pos
 end
@@ -238,7 +251,7 @@ function lex_table!(buf, io, lexed, pos)
         if c ∈ openers
             pos = lex_delim(buf, io, closerdict[c], pos)
         else
-            @assert(isalnum(c))
+            @assert(isnumeric(c) || isletter(c))
         end
         eof(io) && error("table should not have ended yet")
         c = read(io, Char)
@@ -256,6 +269,7 @@ function lex_table!(buf, io, lexed, pos)
 end
 
 function lex(file::AbstractString)
+    """ Parses a .gms file into Array{AbstractLex, 1}. """
     return open(file) do io
         lex(io)
     end

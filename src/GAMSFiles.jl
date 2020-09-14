@@ -40,7 +40,7 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
             if v isa GArray && getname(v) != gams["minimizing"]
                 vsym = Symbol(getname(v))
                 allocex = allocate_expr(v.indices, gams["sets"])
-                unshift!(bodyexprs, :($vsym = $allocex))
+                pushfirst!(bodyexprs, :($vsym = $allocex))
             end
         else
             push!(uvars, v)
@@ -49,17 +49,17 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     # As needed, destructure the input vector
     varnames = Vector{Symbol}(undef, length(uvars))
     if length(uvars) == 1 && (v = uvars[1]) isa GArray
-        varnames[1] = getname(v)
-        xin = Symbol(getname(v))
+        varnames[1] = Symbol(getname(v))
+        xin = varnames[1]
         xaxes = getaxes(v.indices, gams["sets"])
     else
         for (i, v) in enumerate(uvars)
             v isa GText || error("destructured inputs require scalar args, got ", v, ".\nPerhaps there is an unused variable in the file?")
-            varnames[i] = getname(v)
+            varnames[i] = Symbol(getname(v))
         end
         xin = gensym("x")
         xaxes = (Base.OneTo(length(varnames)),)
-        unshift!(bodyexprs, Expr(:(=), Expr(:tuple, varnames...), xin))
+        pushfirst!(bodyexprs, Expr(:(=), Expr(:tuple, varnames...), xin))
     end
     szcheck = :(@assert(axes($xin) == $xaxes))
     body = Expr(:block, szcheck, bodyexprs...)
@@ -316,7 +316,7 @@ function eqs2assigns!(bodyexprs, equations, vars, sets, solvevar)
         else
             error("unexpected key ", key)
         end
-        unshift!(bodyexprs, init)
+        pushfirst!(bodyexprs, init)
     end
     return solved
 end
