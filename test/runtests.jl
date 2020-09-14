@@ -53,6 +53,9 @@ cmpexprs(a, b) = a == b
     @test lexed[3].indices == (GAMSFiles.GNumber(1),)
     @test glex("x=0") == GAMSFiles.AbstractLex[GAMSFiles.GText("x"), GAMSFiles.GText("="), GAMSFiles.GNumber(0)]
     @test glex("x=E=0") == GAMSFiles.AbstractLex[GAMSFiles.GText("x"), GAMSFiles.GText("=e="), GAMSFiles.GNumber(0)]
+    @test glex("<=") == GAMSFiles.AbstractLex[GAMSFiles.GText("<=")]
+    @test glex("j.. x=E=0") == GAMSFiles.AbstractLex[GAMSFiles.GText("j"), GAMSFiles.Dots(".."),
+                                 GAMSFiles.GText("x"), GAMSFiles.GText("=e="), GAMSFiles.GNumber(0)]
 end
 
 @testset "parse_slashed!" begin

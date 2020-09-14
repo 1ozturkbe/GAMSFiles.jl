@@ -158,12 +158,16 @@ function lex!(io, buf, lexed, pos, cterminate = '\0')
     if position(buf) > 0
         tag!(lexed, String(take!(buf)))
     end
-    # Fixing double Dots(".") issue
+    # NOTE THIS HACK: Fixing double Dots(".") and relations issues
     i = 1;
+    eq = GText("=")
     while i < length(lexed)
         if lexed[i] == lexed[i+1] == Dots(".")
             splice!(lexed, i)
             lexed[i] = Dots("..")
+        elseif i < length(lexed)-2 && lexed[i] == lexed[i+2] == eq
+            lexed[i] = GText(string("=", lowercase(lexed[i+1].text), "="))
+            splice!(lexed, [i+1, i+2])
         else i +=1;
         end
     end
