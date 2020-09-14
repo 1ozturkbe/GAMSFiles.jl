@@ -264,7 +264,6 @@ function parseexprs(lexed, debug=false)
         if length(thisarg) != 1
             println(stderr, "thisarg:")
             foreach(x->(print(stderr, "  "); sexpr(stderr, x); println(stderr)), thisarg)
-            print(length(thisarg))
         end
         @assert(length(thisarg) == 1)
         parsed[j] = stripnewcall!(thisarg[1])
