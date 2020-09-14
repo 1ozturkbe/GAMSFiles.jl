@@ -49,13 +49,13 @@ function parsegams(::Type{Module}, modname::Symbol, gams::Dict{String,Any})
     # As needed, destructure the input vector
     varnames = Vector{Symbol}(undef, length(uvars))
     if length(uvars) == 1 && (v = uvars[1]) isa GArray
-        varnames[1] = getname(v)
-        xin = Symbol(getname(v))
+        varnames[1] = Symbol(getname(v))
+        xin = varnames[1]
         xaxes = getaxes(v.indices, gams["sets"])
     else
         for (i, v) in enumerate(uvars)
             v isa GText || error("destructured inputs require scalar args, got ", v, ".\nPerhaps there is an unused variable in the file?")
-            varnames[i] = getname(v)
+            varnames[i] = Symbol(getname(v))
         end
         xin = gensym("x")
         xaxes = (Base.OneTo(length(varnames)),)
